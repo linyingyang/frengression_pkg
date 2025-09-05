@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel", "build"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "frengression"
+version = "0.1.0"
+description = "Frengression model packaged for easy install and reuse."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Your Name" }]
+keywords = ["causal-inference", "generative-models", "machine-learning"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "numpy>=1.21",
+    "torch>=2.0",
+    "engression",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourname/frengression"
+Issues = "https://github.com/yourname/frengression/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["frengression*"]
