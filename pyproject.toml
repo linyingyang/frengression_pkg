@@ -9,7 +9,12 @@ description = "Frengression model packaged for easy install and reuse."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "Your Name" }]
+authors = [
+    { name = "Linying Yang", email = "linying.yang@stats.ox.ac.uk" },
+    { name = "Robin J. Evans", email = "evans@stats.ox.ac.uk" },
+    { name = "Xinwei Shen", email = "xwshen@uw.edu" }
+]
+
 keywords = ["causal-inference", "generative-models", "machine-learning"]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -23,8 +28,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourname/frengression"
-Issues = "https://github.com/yourname/frengression/issues"
+Homepage = "https://github.com/linyingyang/frengression_pkg"
+Issues = "https://github.com/linyingyang/frengression_pkg/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
