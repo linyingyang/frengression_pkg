@@ -8,3 +8,4 @@ def test_forward_pass():
     z = torch.randn(5, 2)
     out = model(x, y, z)
     assert out is not None
+test_forward_pass
