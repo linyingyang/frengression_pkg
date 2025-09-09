@@ -3,6 +3,7 @@
 A lightweight Python package that wraps the `Frengression` and `FrengressionSeq` models.
 
 ## Install (from source)
+Please fork the repository and run the following:
 ```bash
 pip install -U build
 python -m build
