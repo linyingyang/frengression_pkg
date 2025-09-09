@@ -1,6 +1,6 @@
 # frengression
 
-A lightweight Python package that wraps the `Frengression` model.
+A lightweight Python package that wraps the `Frengression` and `FrengressionSeq` models.
 
 ## Install (from source)
 ```bash
