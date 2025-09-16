@@ -3,7 +3,7 @@
 A lightweight Python package that wraps the `Frengression` and `FrengressionSeq` models.
 
 ## Install (from source)
-Please fork the repository and run the following:
+Please fork the repository and run the following in `bash`:
 ```bash
 pip install -U build
 python -m build
@@ -27,3 +27,5 @@ model.train_y(x, z, y, num_iters=100, lr=1e-4, print_every_iter=50,tol=0.000)
 model.train_xz(x, z, num_iters=100, lr=1e-4, print_every_iter=50)
 
 ```
+
+To replicate experiments in the paper, _Frugal, Flexible, Faithful: Causal Data Simulation via Frengression_[https://arxiv.org/pdf/2508.01018], please check _this repository_[https://github.com/xwshen51/frengression].
