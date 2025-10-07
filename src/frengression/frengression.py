@@ -4,14 +4,14 @@ from engression.loss_func import energy_loss_two_sample
 import numpy as np
 import copy
 sigmoid = torch.nn.Sigmoid()
+softmax = torch.nn.Softmax(dim=1)
 
 class Frengression(torch.nn.Module):
     def __init__(self, x_dim, y_dim, z_dim,
                  num_layer=3, hidden_dim=100, noise_dim=10,
-                 x_binary=False, 
-                 #z_binary=False,
-                 z_binary_dims = 0, # number of binary confounders.
-                 y_binary=False,
+                 x_cat=False, 
+                 z_cat_dims = [], # list of categorical confounders with their dimensions. e.g. [2,3] means one binary and one 3-class categorical
+                 y_cat=False,
                  device=torch.device('cuda')):
         super().__init__()
         self.x_dim = x_dim
@@ -20,13 +20,12 @@ class Frengression(torch.nn.Module):
         self.num_layer = num_layer
         self.hidden_dim = hidden_dim
         self.noise_dim = noise_dim
-        self.x_binary = x_binary
-        # self.z_binary = z_binary
-        self.z_binary_dims = z_binary_dims
-        self.y_binary = y_binary
+        self.x_cat = x_cat
+        self.z_cat_dims = z_cat_dims
+        self.y_cat = y_cat
         self.device = device
         self.model_xz = StoNet(0, x_dim + z_dim, num_layer, hidden_dim, max(x_dim + z_dim, noise_dim), add_bn=False, noise_all_layer=False).to(device)
-        out_act = 'sigmoid' if y_binary else None
+        out_act = 'softmax' if y_cat else None
         self.model_y = StoNet(x_dim + y_dim, y_dim, num_layer, hidden_dim, noise_dim, add_bn=False, noise_all_layer=False, out_act=out_act).to(device)
         self.model_eta = StoNet(x_dim + z_dim, y_dim, num_layer, hidden_dim, noise_dim, add_bn=False, noise_all_layer=False).to(device)
         
@@ -39,12 +38,23 @@ class Frengression(torch.nn.Module):
             self.optimizer_xz.zero_grad()
             sample1 = self.model_xz(x.size(0))
             sample2 = self.model_xz(x.size(0))
-            if self.x_binary:
-                sample1[:, :self.x_dim] = sigmoid(sample1[:, :self.x_dim])
-                sample2[:, :self.x_dim] = sigmoid(sample2[:, :self.x_dim])
-            if self.z_binary_dims > 0:
-                sample1[:, self.x_dim:(self.x_dim+self.z_binary_dims)] = sigmoid(sample1[:, self.x_dim:(self.x_dim+self.z_binary_dims)])
-                sample2[:, self.x_dim:(self.x_dim+self.z_binary_dims)] = sigmoid(sample2[:, self.x_dim:(self.x_dim+self.z_binary_dims)])
+            if self.x_cat:
+                sample1[:, :self.x_dim] = softmax(sample1[:, :self.x_dim])
+                sample2[:, :self.x_dim] = softmax(sample2[:, :self.x_dim])
+            #if self.z_binary_dims > 0:
+            #    sample1[:, self.x_dim:(self.x_dim+self.z_binary_dims)] = sigmoid(sample1[:, self.x_dim:(self.x_dim+self.z_binary_dims)])
+            #    sample2[:, self.x_dim:(self.x_dim+self.z_binary_dims)] = sigmoid(sample2[:, self.x_dim:(self.x_dim+self.z_binary_dims)])
+            if self.z_cat_dims:
+                start_idx = self.x_dim
+                for zc_dim in self.z_cat_dims:
+                    if zc_dim == 2:
+                        sample1[:, start_idx:start_idx+1] =sigmoid(sample1[:, start_idx:start_idx+1])
+                        sample2[:, start_idx:start_idx+1] =sigmoid(sample2[:, start_idx:start_idx+1])
+                        start_idx += 1
+                    else:
+                        sample1[:, start_idx:start_idx+zc_dim] =softmax(sample1[:, start_idx:start_idx+zc_dim])
+                        sample2[:, start_idx:start_idx+zc_dim] =softmax(sample2[:, start_idx:start_idx+zc_dim])
+                        start_idx += zc_dim
             loss, loss1, loss2 = energy_loss_two_sample(xz, sample1, sample2)
             loss.backward()
             self.optimizer_xz.step()
@@ -99,23 +109,30 @@ class Frengression(torch.nn.Module):
         xz = self.model_xz(sample_size)
         x = xz[:, :self.x_dim]
         z = xz[:, self.x_dim:]
-        if self.x_binary:
-            x = (x > 0).float()
-        if self.z_binary_dims>0:
-            z[:, :self.z_binary_dims] = (z[:, :self.z_binary_dims] > 0).float()
+        if self.x_cat:
+            max_indices = torch.argmax(x, dim=1)
+            x = torch.nn.functional.one_hot(max_indices, num_classes=x.size(1)).float().to(self.device)
+
+            # x = (x > 0).float()
+        if self.z_cat_dims :
+            start_idx = 0
+            for zc_dim in self.z_cat_dims:
+                if zc_dim == 2:
+                    z[:, start_idx:start_idx+1] = (z[:, start_idx:start_idx+1] > 0).float()
+                    start_idx += 1
+                else:
+                    max_indices = torch.argmax(z[:, start_idx:start_idx+zc_dim], dim=1)
+                    z[:, start_idx:start_idx+zc_dim] = torch.nn.functional.one_hot(max_indices, num_classes=zc_dim).float().to(self.device)
+                    start_idx += zc_dim
+        #if self.z_binary_dims>0:
+        #    z[:, :self.z_binary_dims] = (z[:, :self.z_binary_dims] > 0).float()
 
         return x, z    
         
-    @torch.no_grad()
+    @torch.no_grad() 
     def sample_joint(self, sample_size=100):
         self.eval()
-        xz = self.model_xz(sample_size)
-        x = xz[:, :self.x_dim]
-        z = xz[:, self.x_dim:]
-        if self.x_binary:
-            x = (x > 0).float()
-        if self.z_binary_dims>0:
-            z[:, :self.z_binary_dims] = (z[:, :self.z_binary_dims] > 0).float()
+        x,z = self.sample_xz(sample_size)
         xz = torch.cat([x, z], dim=1)
         eta = self.model_eta(xz)
         y = self.model_y(torch.cat([x, eta], dim=1))
