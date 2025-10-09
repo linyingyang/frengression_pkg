@@ -29,3 +29,6 @@ model.train_xz(x, z, num_iters=100, lr=1e-4, print_every_iter=50)
 ```
 
 To replicate experiments in the paper, [_Frugal, Flexible, Faithful: Causal Data Simulation via Frengression_](https://arxiv.org/pdf/2508.01018), please check [_this repository_](https://github.com/xwshen51/frengression).
+
+## News
+- **2025.10** `frengression_in_R.Rmd` can be found in the `examples` folder. This file provides an example of implementing frengression in R.  (Contributed by [Vanessa Rodriguez](https://www.linkedin.com/in/v--rodriguez/)).
