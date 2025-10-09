@@ -1,0 +1,149 @@
+---
+title: "frengression"
+output: html_document
+---
+
+```{r}
+library(reticulate)
+
+
+# Simple dataset
+
+cohort_size <- 1000  
+set.seed(1254)
+Z.1 <- rnorm(cohort_size)  
+Z.2 <- rnorm(cohort_size)  
+Z.3 <- rnorm(cohort_size)  
+# randomized treatment
+X <- rbinom(cohort_size, 1, 0.5)
+# binary outcome variable
+Y <- rbinom(cohort_size, 1,  1/(1 + exp(-(-2 + Z.1 + Z.2 + Z.3 + X * Z.1))))
+df <- data.frame(Z.1, Z.2, Z.3, X, Y)
+```
+
+
+```{python}
+import sys, os
+import random
+import time
+
+# add the project root to sys.path
+# make sure 'frengression.py' is available in the directory
+root = os.path.abspath(os.path.join(os.getcwd(), "../src"))
+if root not in sys.path:
+    sys.path.insert(0, root)
+
+from frengression import *
+
+device = torch.device('cpu')
+
+import numpy as np
+```
+
+```{python}
+
+torch.set_num_threads(20)
+
+num_iters = 100
+
+# cast data into tensor objects
+x_tr = torch.tensor(r.df['X'].values, dtype=torch.int32).view(-1, 1)
+z_tr = torch.tensor(r.df[['Z.1', 'Z.2', 'Z.3']].values, dtype=torch.float32)
+y_tr = torch.tensor(r.df['Y'].values, dtype=torch.int32).view(-1, 1)
+
+# build the frengression model
+model = Frengression(x_dim = 1, y_dim = 1, z_dim = 3,
+                             noise_dim=1, num_layer=3, hidden_dim=100,
+                             device=device, x_binary=True,
+                             y_binary=True,
+                             z_binary_dims=0)
+
+# train the model
+random.seed(10)
+
+start = time.time()
+model.train_y(x=x_tr,
+              z=z_tr, 
+              y=y_tr, 
+              num_iters=num_iters, lr=1e-4, print_every_iter=10, tol=0)
+
+model.train_xz(x_tr, z_tr, num_iters=num_iters, lr=1e-4, print_every_iter=10)
+end = time.time()
+
+train_time = end - start
+
+print("training time: {f}", train_time)
+
+# generate samples from trained model
+sampled_x_5x, sampled_y_5x, sampled_z_5x = model.sample_joint(sample_size=int(r.cohort_size))
+```
+
+
+```{python}
+
+# specifying the causal margin
+
+import torch.distributions as dist
+
+normal = dist.Normal(0., 1.)
+class SpecifiedCausalMargin(StoNetBase):
+    def __init__(self, ate, noise_dim, eta_dist, x_dim):
+        super().__init__(noise_dim=noise_dim)
+        self.ate = ate  # or self.register_buffer('eta', torch.tensor(eta))
+        self.x_dim = x_dim
+        self.eta_dist = eta_dist
+
+    def forward(self, x):
+        if x.shape[1]==self.x_dim:
+            if self.eta_dist == 'gamma':
+                # per‐element alpha, beta
+                alpha_arr = torch.full(x.shape, 2.0, device=x.device)
+                beta_arr  = torch.full(x.shape, 1.0, device=x.device)
+                gamma_dist = torch.distributions.Gamma(alpha_arr, beta_arr)
+                eta = gamma_dist.sample()
+            if self.eta_dist == 'gaussian':
+                eta = torch.randn(x.shape, device=x.device)
+            if self.eta_dist == 'laplace':
+                lap  = dist.Laplace(0, 0.5)
+                eta  = lap.sample(x.shape,device=x.device)
+            if self.eta_dist == 'lognormal':
+                lognorm = dist.LogNormal(0, 1)
+                eta     = lognorm.sample(x.shape).to(x.device)
+        else:
+            x_eta = x.clone()
+            x = x_eta[:, :self.x_dim]
+            eta_inp = x_eta[:, self.x_dim:]
+            if self.eta_dist== 'gaussian':
+                eta = eta_inp  
+            if self.eta_dist == 'gamma':
+                alpha = torch.full_like(eta_inp, 2.0)
+                beta  = torch.full_like(eta_inp, 1.0)
+                u = dist.Normal(0, 1).cdf(eta_inp)
+                u = u.clamp(min=1e-6, max=1 - 1e-6)
+                eta = special.gammaincinv(alpha, u) / beta
+            if self.eta_dist == 'laplace':
+                u = dist.Normal(0, 1).cdf(eta_inp)
+                u = u.clamp(min=1e-6, max=1-1e-6)
+                eta = torch.where(
+                    u < 0.5,
+                    0 +  0.5*torch.log(2 * u),
+                    0 -  0.5* torch.log(2 * (1 - u))
+                )
+            if self.eta_dist == 'lognormal':
+                u = normal.cdf(eta_inp).clamp(min=1e-6, max=1 - 1e-6)
+                z = normal.icdf(u)     # which is exactly eta_inp
+                eta = torch.exp(z)
+
+        # other distributions can be implemented likewise
+        return self.ate * x + eta
+      
+margin_module = SpecifiedCausalMargin(ate=5, eta_dist="gaussian", x_dim=model.x_dim, noise_dim=model.noise_dim)
+model.specify_causal(causal_margin=margin_module)
+
+# sample new data which follows the specified causal margin
+
+sampled_x_5x, sampled_y_5x, sampled_z_5x = model.sample_joint(sample_size=1000)
+
+```
+
+
