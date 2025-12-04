@@ -3,6 +3,7 @@ from engression.models import StoNet, StoNetBase
 from engression.loss_func import energy_loss_two_sample
 import numpy as np
 import copy
+from sklearn.model_selection import train_test_split
 sigmoid = torch.nn.Sigmoid()
 softmax = torch.nn.Softmax(dim=1)
 
@@ -10,7 +11,8 @@ class Frengression(torch.nn.Module):
     def __init__(self, x_dim, y_dim, z_dim,
                  num_layer=3, hidden_dim=100, noise_dim=10,
                  x_cat=False, 
-                 z_cat_dims = [], # list of categorical confounders with their dimensions. e.g. [2,3] means one binary and one 3-class categorical
+                 #z_binary=False,
+                 z_cat_dims = [2,3], # list of categorical confounders with their dimensions.
                  y_cat=False,
                  device=torch.device('cuda')):
         super().__init__()
@@ -61,42 +63,187 @@ class Frengression(torch.nn.Module):
             if (i == 0) or ((i + 1) % print_every_iter == 0):
                 print(f'Epoch {i + 1}: loss {loss.item():.4f}, loss1 {loss1.item():.4f}, loss2 {loss2.item():.4f}')
     
-    def train_y(self, x, z, y, num_iters=100, lr=1e-3, print_every_iter=10, tol=0.01):
+    def compute_y_eta_losses(self, x, z, xz, y):
+        """
+        Compute two-sample energy losses for the y-model and eta-model.
+        Inputs must already be on the correct device (self.device).
+        Returns tuple: (loss_y, loss1_y, loss2_y, loss_eta, loss1_eta, loss2_eta)
+        """
+        # --- Y MODEL LOSS ---
+        # Two eta samples using the same xz
+        eta1 = self.model_eta(xz)
+        eta2 = self.model_eta(xz)
 
+        # Generate two y samples conditioned on x and each eta
+        y_sample1 = self.model_y(torch.cat([x, eta1], dim=1))
+        y_sample2 = self.model_y(torch.cat([x, eta2], dim=1))
+
+        # Compute y loss (expects tensors)
+        loss_y, loss1_y, loss2_y = energy_loss_two_sample(y, y_sample1, y_sample2)
+
+        # --- ETA MODEL LOSS ---
+        eta_true = torch.randn_like(y, device=self.device)
+
+        # Decoupled xz pairs (shuffle z to break coupling)
+        idx1 = torch.randperm(z.size(0), device=self.device)
+        idx2 = torch.randperm(z.size(0), device=self.device)
+        xz_decouple1 = torch.cat([x, z[idx1]], dim=1)
+        xz_decouple2 = torch.cat([x, z[idx2]], dim=1)
+
+        eta1_dec = self.model_eta(xz_decouple1)
+        eta2_dec = self.model_eta(xz_decouple2)
+
+        loss_eta, loss1_eta, loss2_eta = energy_loss_two_sample(eta_true, eta1_dec, eta2_dec)
+
+        return (loss_y, loss1_y, loss2_y, loss_eta, loss1_eta, loss2_eta)
+
+
+    def train_y(
+        self,
+        x,
+        z,
+        y,
+        num_iters=100,
+        lr=1e-3,
+        val_size=0.2,
+        print_every_iter=10,
+        tol=0.01,
+        seed=42,):
+        """
+        Train model_y and model_eta together using the two-sample energy losses.
+        x, z, y should be torch tensors (any device) — they will be moved to self.device.
+        Returns a dictionary with final losses and histories.
+        """
+
+        device = self.device
         self.model_y.train()
         self.model_eta.train()
-        self.optimizer_y = torch.optim.Adam(list(self.model_y.parameters()) + list(self.model_eta.parameters()), lr=lr)
-        x = x.to(self.device)
-        y = y.to(self.device)
-        z = z.to(self.device)
-        xz = torch.cat([x, z], dim=1)
-        xz = xz.to(self.device)
-        for i in range(num_iters):
-            self.optimizer_y.zero_grad()
-            eta1 = self.model_eta(xz)
-            eta2 = self.model_eta(xz)
-            y_sample1 = self.model_y(torch.cat([x, eta1], dim=1))
-            y_sample2 = self.model_y(torch.cat([x, eta2], dim=1))
-            loss_y, loss1_y, loss2_y = energy_loss_two_sample(y, y_sample1, y_sample2)
-            eta_true = torch.randn(y.size(), device=self.device)
-            # eta1 = self.model_eta(xz)
-            # eta2 = self.model_eta(xz[torch.randperm(x.size(0))])
-            xz_decouple1 = torch.cat([x, z[torch.randperm(z.size(0))]], dim=1)
-            xz_decouple2 = torch.cat([x, z[torch.randperm(z.size(0))]], dim=1)
-            eta1 = self.model_eta(xz_decouple1)
-            eta2 = self.model_eta(xz_decouple2)
-            loss_eta, loss1_eta, loss2_eta = energy_loss_two_sample(eta_true, eta1, eta2)
 
-            if abs(loss2_y.item() - loss1_y.item()) < tol and \
-                abs(loss2_eta.item() - loss1_eta.item()) < tol:
-                print(f"Stopping at iter {i}: |Δy|={(loss2_y-loss1_y).item():.4e}, |Δη|={(loss2_eta-loss1_eta).item():.4e}")
+        # optimizer for both networks
+        self.optimizer_y = torch.optim.Adam(
+            list(self.model_y.parameters()) + list(self.model_eta.parameters()), lr=lr
+        )
+
+        # Ensure reproducibility for splits
+        torch.manual_seed(seed)
+
+        n = x.size(0)
+        if not (z.size(0) == n and y.size(0) == n):
+            raise ValueError("x, z and y must have the same first-dimension / batch size")
+
+        # Create a randomized permutation and split indices
+        perm = torch.randperm(n, device=device)
+        split = int((1.0 - val_size) * n)
+        train_idx = perm[:split]
+        val_idx = perm[split:]
+
+        # Move data to device and index
+        x = x.to(device)
+        z = z.to(device)
+        y = y.to(device)
+
+        tr_x = x[train_idx]
+        val_x = x[val_idx]
+        tr_z = z[train_idx]
+        val_z = z[val_idx]
+        tr_y = y[train_idx]
+        val_y = y[val_idx]
+
+        # Precompute concatenated xz
+        tr_xz = torch.cat([tr_x, tr_z], dim=1)
+        val_xz = torch.cat([val_x, val_z], dim=1)
+
+        tr_losses = []
+        val_losses = []
+
+        for i in range(num_iters):
+            # zero grads
+            self.optimizer_y.zero_grad()
+
+            # compute training losses
+            (
+                tr_loss_y,
+                tr_loss1_y,
+                tr_loss2_y,
+                tr_loss_eta,
+                tr_loss1_eta,
+                tr_loss2_eta,
+            ) = self.compute_y_eta_losses(tr_x, tr_z, tr_xz, tr_y)
+
+            # stopping check: compare components (use absolute values)
+            if (
+                abs((tr_loss2_y - tr_loss1_y).item()) < tol
+                and abs((tr_loss2_eta - tr_loss1_eta).item()) < tol
+            ):
+                print(
+                    f"Stopping at iter {i}: |Δy|={abs((tr_loss2_y-tr_loss1_y).item()):.4e}, |Δη|={abs((tr_loss2_eta-tr_loss1_eta).item()):.4e}"
+                )
                 break
-            loss = loss_y + loss_eta
-            loss.backward()
+
+            tr_loss = tr_loss_y + tr_loss_eta
+            tr_loss.backward()
             self.optimizer_y.step()
+
+            # validation (no grad)
+            with torch.no_grad():
+                (
+                    val_loss_y,
+                    val_loss1_y,
+                    val_loss2_y,
+                    val_loss_eta,
+                    val_loss1_eta,
+                    val_loss2_eta,
+                ) = self.compute_y_eta_losses(val_x, val_z, val_xz, val_y)
+                val_loss = val_loss_y + val_loss_eta
+
+            # Logging & store history
+            tr_losses.append(
+                {
+                    "epoch": i,
+                    "loss": tr_loss.item(),
+                    "loss_y": tr_loss_y.item(),
+                    "loss1_y": tr_loss1_y.item(),
+                    "loss2_y": tr_loss2_y.item(),
+                    "loss_eta": tr_loss_eta.item(),
+                    "loss1_eta": tr_loss1_eta.item(),
+                    "loss2_eta": tr_loss2_eta.item(),
+                }
+            )
+            val_losses.append(
+                {
+                    "epoch": i,
+                    "loss": val_loss.item(),
+                    "loss_y": val_loss_y.item(),
+                    "loss_eta": val_loss_eta.item(),
+                }
+            )
+
             if (i == 0) or ((i + 1) % print_every_iter == 0):
-                print(f'Epoch {i + 1}: loss {loss.item():.4f},\tloss_y {loss_y.item():.4f}, {loss1_y.item():.4f}, {loss2_y.item():.4f},\tloss_eta {loss_eta.item():.4f}, {loss1_eta.item():.4f}, {loss2_eta.item():.4f}')
-    
+                print(
+                    f"Epoch {i + 1}: loss {tr_loss.item():.4f},\t"
+                    f"loss_y {tr_loss_y.item():.4f}, {tr_loss1_y.item():.4f}, {tr_loss2_y.item():.4f},\t"
+                    f"loss_eta {tr_loss_eta.item():.4f}, {tr_loss1_eta.item():.4f}, {tr_loss2_eta.item():.4f}"
+                )
+                print(
+                    f"           Val loss {val_loss.item():.4f},\tloss_y {val_loss_y.item():.4f},\tloss_eta {val_loss_eta.item():.4f}"
+                )
+
+        # final returned scalars (safe access: if loop never ran, set to None)
+        final = {
+            "tr_loss": tr_losses[-1]["loss"] if tr_losses else None,
+            "val_loss": val_losses[-1]["loss"] if val_losses else None,
+            "tr_loss_y": tr_losses[-1]["loss_y"] if tr_losses else None,
+            "val_loss_y": val_losses[-1]["loss_y"] if val_losses else None,
+            "tr_loss_eta": tr_losses[-1]["loss_eta"] if tr_losses else None,
+            "val_loss_eta": val_losses[-1]["loss_eta"] if val_losses else None,
+            "tr_history": tr_losses,
+            "val_history": val_losses,
+            "epochs_run": len(tr_losses),
+        }
+
+        return final
+
+
     @torch.no_grad()
     def predict_causal(self, x, target="mean", sample_size=100):
         self.eval()
@@ -159,7 +306,6 @@ class Frengression(torch.nn.Module):
     def reset_y_models(self):
         self.model_y = StoNet(self.x_dim + self.y_dim, self.y_dim, self.num_layer, self.hidden_dim, self.noise_dim, add_bn=False, noise_all_layer=False).to(self.device)
         self.model_eta = StoNet(self.x_dim + self.z_dim, self.y_dim, self.num_layer, self.hidden_dim, self.noise_dim, add_bn=False, noise_all_layer=False).to(self.device)
-
 
 class FrengressionSeq(torch.nn.Module):
     def __init__(self, x_dim, y_dim, z_dim, T, s_dim,
