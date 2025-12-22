@@ -3,3 +3,8 @@ build/
 *.egg-info/
 __pycache__/
 *.pyc
+examples/model_random.pt
+examples/model_random_1.pt
+examples/model_random_2.pt
+examples/random.ipynb
+examples/random copy.ipynb
