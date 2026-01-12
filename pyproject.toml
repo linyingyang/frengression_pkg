@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "frengression"
-version = "0.1.0"
+version = "0.1.2"
 description = "Frengression model packaged for easy install and reuse."
 readme = "README.md"
 requires-python = ">=3.9"
