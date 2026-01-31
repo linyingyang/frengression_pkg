@@ -119,12 +119,16 @@ class Frengression(torch.nn.Module):
         xz = torch.cat([x, z], dim=1)
         eta = self.model_eta(xz)
         y = self.model_y(torch.cat([x, eta], dim=1))
+        if self.y_binary:
+            y = (y > 0.5).float()
         return x, y, z
 
     @torch.no_grad()
     def sample_causal_margin(self, x, sample_size=100):
         self.eval()
         y = self.model_y.sample(x, sample_size = sample_size)
+        if self.y_binary:
+            y = (y > 0.5).float()
         return y
     
     @torch.no_grad()
@@ -133,6 +137,8 @@ class Frengression(torch.nn.Module):
         xz = xz.to(self.device)
         eta = self.model_eta(xz)
         y = self.model_y.predict(torch.cat([x, eta], dim=1), sample_size = sample_size)
+        if self.y_binary:
+            y = (y > 0.5).float()
         return y
     
 
