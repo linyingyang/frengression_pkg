@@ -2,9 +2,11 @@
 
 For a VS Code/Jupyter workflow, open `examples/compare_frugal_flows.ipynb`,
 select the Python environment, and choose **Run All**. The notebook installs
-missing packages, runs a small wiring check and then the full comparison by
-default; set `RUN_FULL = False` in its settings cell to stop after the quick
-check. Results are saved to `examples/benchmark_outputs/`.
+missing packages, runs a 20-step wiring check and a one-seed pilot with 1,000
+Frengression iterations by default. It deliberately hides accuracy numbers
+from the wiring check. Inspect the pilot's signed ATE and arm means, then set
+`RUN_FULL = True` in its settings cell for the five-seed run (2,000 Frengression
+iterations). Results are saved to `examples/benchmark_outputs/`.
 
 `compare_frugal_flows.py` fits both released implementations on exactly the
 same observational draws. Treatment is binary and the scalar outcome has a
@@ -20,33 +22,49 @@ the `f,h` fit and excludes its observational-past generator `g`.
 
 The optional `--multivariate` arm fits Frengression jointly to a two-dimensional
 outcome and compares it to two independently fitted scalar Frengression models
-on the same data. It scores the *joint* intervention law (energy distance, mean
-error, covariance error). The independent-margin reference cannot reproduce
-cross-outcome dependence by construction; the comparison tests whether the joint
-fit learns it. Label the Frugal Flows entry “not implemented in the released
-scalar-outcome pipeline”; do not record it as a failed fit or as a performance
-win. This is a scope demonstration, separate from the shared-setting comparison.
+on the same data. Add `--multivariate-ff` to fit two scalar Frugal Flows on
+those data as another independent-margin reference (two extra fits per seed).
+All rows score joint energy, mean error, covariance error, cross-covariance
+error, and average marginal Wasserstein distance. Check marginal error before
+interpreting a joint gap: it may reflect scalar fit differences as well as
+missing dependence. A product of scalar margins cannot reproduce cross-outcome
+dependence by construction. **This is not a joint Frugal Flows model** and is
+not a numerical victory over one. A capable joint-outcome baseline would be
+needed to argue broad multivariate superiority.
 
 ## Run
 
 Create an environment with Python, PyTorch, `engression`, NumPy, SciPy, JAX,
 FlowJAX, Equinox and Optax, then install this repository and the official
 `llaurabatt/frugal-flows` repository in editable mode. Run from `examples/`:
+Frugal Flows' `environment.yaml` pins `flowjax==19.1.0` and
+`lineax==0.1.0`; older FlowJAX builds lack the `fit_to_data(data=...)` API
+its current code uses. The notebook setup checks and installs those versions
+in its selected kernel. Restart the kernel after changing package versions.
 
 ```bash
 python compare_frugal_flows.py --n 200 --repeats 1 --fr-iters 20 \
   --flow-epochs 20 --marginal-epochs 20 --mc 100 --truth-mc 1000 \
   --output smoke.csv
 
+python compare_frugal_flows.py --n 1000 --repeats 1 --fr-iters 1000 \
+  --flow-epochs 400 --marginal-epochs 100 --mc 1000 --truth-mc 20000 \
+  --output pilot.csv
+
 python compare_frugal_flows.py --n 2000 --repeats 5 --multivariate \
   --output comparison_results.csv
+
+# Optional: substantially more training, including two extra scalar flows per seed.
+python compare_frugal_flows.py --n 2000 --repeats 5 --multivariate \
+  --multivariate-ff --output comparison_with_ff_margins.csv
 ```
 
-The first command only checks the end-to-end wiring. The second is a proposed
-benchmark, not an already completed experiment. Inspect fit diagnostics and
-convergence on a pilot before fixing final epochs and seeds, and report the
-hardware and package commits. Do not add numerical conclusions to the paper
-until the results exist.
+The first command only checks the end-to-end wiring; 20 iterations cannot
+establish Frengression accuracy. The second is a one-seed pilot, and the third
+is a proposed benchmark, not an already completed experiment. Inspect fit
+diagnostics and convergence on the pilot before fixing final epochs and seeds,
+and report the hardware and package commits. Do not add numerical conclusions
+to the paper until the results exist.
 
 ## Existing continuous-treatment figure
 

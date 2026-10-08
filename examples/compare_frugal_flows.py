@@ -3,8 +3,9 @@
 Both methods fit the same simulated observational data with a binary treatment.
 The scalar experiment scores the *whole* fitted interventional distribution,
 not just the ATE. The optional two-outcome experiment compares one joint
-Frengression fit with two independent one-outcome Frengression fits: the released
-FrugalFlowModel pipeline has a scalar outcome margin.
+Frengression fit with independent one-outcome fits. These can include two
+Frugal Flows fits, but their combined samples are a product of scalar margins:
+the released FrugalFlowModel pipeline has no joint outcome model.
 
 Run with the frengression and frugal-flows repositories installed. No result
 is included in this script; training must be run before reporting numbers.
@@ -14,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import inspect
 import sys
 import time
 from pathlib import Path
@@ -56,6 +58,12 @@ def score_scalar(draw0, draw1, truth0, truth1):
     true_ate = float(truth1.mean() - truth0.mean())
     est_ate = float(draw1.mean() - draw0.mean())
     return {
+        "true_ate": true_ate,
+        "estimated_ate": est_ate,
+        "true_mean0": float(truth0.mean()),
+        "true_mean1": float(truth1.mean()),
+        "estimated_mean0": float(draw0.mean()),
+        "estimated_mean1": float(draw1.mean()),
         "ate_error": abs(est_ate - true_ate),
         "wasserstein_mean": 0.5 * (wasserstein_distance(draw0, truth0) + wasserstein_distance(draw1, truth1)),
         "energy_mean": 0.5 * (energy_distance(draw0, truth0) + energy_distance(draw1, truth1)),
@@ -76,6 +84,25 @@ def multivariate_energy(draw, truth):
     return float(2 * cdist(draw, truth).mean()
                  - 2 * pdist(draw).sum() / (len(draw) ** 2)
                  - 2 * pdist(truth).sum() / (len(truth) ** 2))
+
+
+def score_two_outcomes(draws, truths):
+    """Score joint dependence and scalar margins separately for both arms."""
+    return {
+        "joint_energy_mean": float(np.mean([multivariate_energy(d, t)
+                                            for d, t in zip(draws, truths)])),
+        "marginal_wasserstein_mean": float(np.mean([
+            wasserstein_distance(d[:, j], t[:, j])
+            for d, t in zip(draws, truths) for j in range(2)])),
+        "mean_error": float(np.mean([np.abs(d.mean(0) - t.mean(0)).mean()
+                                      for d, t in zip(draws, truths)])),
+        "covariance_error": float(np.mean([np.linalg.norm(np.cov(d, rowvar=False)
+                                                          - np.cov(t, rowvar=False), ord="fro")
+                                           for d, t in zip(draws, truths)])),
+        "cross_covariance_error": float(np.mean([
+            abs(np.cov(d, rowvar=False)[0, 1] - np.cov(t, rowvar=False)[0, 1])
+            for d, t in zip(draws, truths)])),
+    }
 
 
 def fit_frengression(x, z, y, seed: int, iterations: int, mc: int):
@@ -105,7 +132,12 @@ def fit_frengression(x, z, y, seed: int, iterations: int, mc: int):
 def fit_frugal_flows(x, z, y, seed: int, epochs: int, marginal_epochs: int, mc: int):
     import jax
     import jax.numpy as jnp
+    from flowjax.train import fit_to_data
     from frugal_flows.benchmarking import FrugalFlowModel
+
+    if "data" not in inspect.signature(fit_to_data).parameters:
+        raise RuntimeError("Incompatible FlowJAX: Frugal Flows requires fit_to_data(data=...). "
+                           "Install flowjax==19.1.0 in this kernel and restart it.")
 
     jax.config.update("jax_enable_x64", True)
     model = FrugalFlowModel(Y=jnp.asarray(y, dtype=jnp.float64),
@@ -167,19 +199,29 @@ def run(args):
                 separate_seconds += fit_seconds
             independent_draws = [np.concatenate((separate[0][arm], separate[1][arm]), axis=1)
                                  for arm in (0, 1)]
-            for method, method_draws, fit_seconds in (
+            candidates = [
                 ("frengression_joint", draws2, seconds),
                 ("frengression_independent_margins", independent_draws, separate_seconds),
-            ):
+            ]
+            if getattr(args, "multivariate_ff", False):
+                ff_separate = []
+                ff_seconds = 0.0
+                for coordinate in range(2):
+                    arm_draws, fit_seconds = fit_frugal_flows(
+                        x2, z2, y2[:, coordinate:coordinate + 1],
+                        seed + 700000 + coordinate, args.flow_epochs,
+                        args.marginal_epochs, args.mc)
+                    ff_separate.append(arm_draws)
+                    ff_seconds += fit_seconds
+                ff_independent_draws = [
+                    np.concatenate((ff_separate[0][arm], ff_separate[1][arm]), axis=1)
+                    for arm in (0, 1)]
+                candidates.append(("frugal_flows_independent_margins",
+                                   ff_independent_draws, ff_seconds))
+            for method, method_draws, fit_seconds in candidates:
                 rows.append(dict(seed=seed, setting="binary_two_outcomes", method=method,
                                  seconds=fit_seconds,
-                                 joint_energy_mean=np.mean([multivariate_energy(d, t)
-                                                            for d, t in zip(method_draws, true2)]),
-                                 mean_error=np.mean([np.abs(d.mean(0) - t.mean(0)).mean()
-                                                     for d, t in zip(method_draws, true2)]),
-                                 covariance_error=np.mean([np.linalg.norm(np.cov(d, rowvar=False)
-                                                                         - np.cov(t, rowvar=False), ord="fro")
-                                                           for d, t in zip(method_draws, true2)])))
+                                 **score_two_outcomes(method_draws, true2)))
                 print(rows[-1], flush=True)
 
     out = Path(args.output)
@@ -205,11 +247,15 @@ def cli():
     parser.add_argument("--flow-epochs", type=int, default=2000)
     parser.add_argument("--marginal-epochs", type=int, default=400)
     parser.add_argument("--multivariate", action="store_true")
+    parser.add_argument("--multivariate-ff", action="store_true",
+                        help="Fit two extra scalar Frugal Flows as a product-of-margins reference")
     parser.add_argument("--output", default="comparison_results.csv")
     args = parser.parse_args()
     if min(args.n, args.mc, args.truth_mc, args.repeats,
            args.fr_iters, args.flow_epochs, args.marginal_epochs) < 2:
         parser.error("Sample sizes, repeats, and training iterations must all be at least 2")
+    if args.multivariate_ff and not args.multivariate:
+        parser.error("--multivariate-ff also requires --multivariate")
     run(args)
 
 
