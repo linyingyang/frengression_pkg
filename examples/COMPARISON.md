@@ -26,11 +26,14 @@ The code uses their exact ATE, means, and analytic Gaussian quantiles and
 distribution distances. It never estimates truth by drawing a separate
 intervention sample. The fitted models still require finite model draws to
 estimate their own means, so report `model_draw_ate_se` and use a sufficiently
-large `mc` (10,000 by default). A one-seed pilot runs by default; set
-`RUN_FR_DIAGNOSTIC=True` for an optional 2,000-update Frengression fit on
-the same data. Set `RUN_FULL=True` only after checking the pilot: it runs
-the original five-level instrument-strength grid with 30 repetitions per
-level for both methods and can take considerable time.
+large `mc` (10,000 by default). The notebook now defaults to a staged grid: five instrument strengths and
+five paired seeds per strength (`RUN_GRID_PILOT=True`, `RUN_PILOT=False`).
+Each completed seed is stored separately, and a combined CSV is refreshed
+after every seed; rerunning the cell reuses complete matching files. This can
+take more than half an hour on a laptop. The previous one-seed pilot can be
+repeated with `RUN_PILOT=True`. Set `RUN_FULL=True` later to run the original
+five-level grid with 30 repetitions per level for the final table. Both flags
+are independent, and the 30-repetition run is off by default.
 
 Command-line equivalent for one strength and one seed:
 
