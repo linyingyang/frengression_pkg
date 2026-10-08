@@ -133,6 +133,55 @@ def fit_frengression(x, z, y, seed: int, iterations: int, mc: int):
     return draws, seconds
 
 
+def fit_frugal_flows_official(x, z, y, seed: int, epochs: int,
+                              marginal_epochs: int, mc: int):
+    """Use the authors' benchmarking hyperparameters for a 10-D copula.
+
+    The dictionaries are imported from the pinned Frugal Flows repository
+    itself; only the epoch limit and progress display are
+    overridden for this experiment. Their 10-D setting uses a wider copula
+    conditioner than our earlier exploratory comparison.
+    """
+    import inspect
+    import jax
+    import jax.numpy as jnp
+    from flowjax.train import fit_to_data
+    from frugal_flows.benchmarking import (
+        FrugalFlowModel, hyperparam_dict, causal_margin_hyperparam_dict,
+    )
+
+    if "data" not in inspect.signature(fit_to_data).parameters:
+        raise RuntimeError("Frugal Flows requires flowjax==19.1.0 in this kernel; restart after installing.")
+    jax.config.update("jax_enable_x64", True)
+    model = FrugalFlowModel(
+        Y=jnp.asarray(y, dtype=jnp.float64),
+        X=jnp.asarray(x, dtype=jnp.float64),
+        Z_cont=jnp.asarray(z, dtype=jnp.float64),
+    )
+    flow_kwargs = dict(hyperparam_dict)
+    flow_kwargs.update(max_epochs=epochs, max_patience=min(100, epochs),
+                       show_progress=False)
+    causal_kwargs = dict(causal_margin_hyperparam_dict)
+    start = time.perf_counter()
+    model.train_marginal_cdfs(
+        jax.random.key(seed),
+        dict(max_epochs=marginal_epochs,
+             max_patience=min(100, marginal_epochs)),
+    )
+    model.train_frugal_flow(
+        jax.random.key(seed + 10000), flow_kwargs,
+        "flexible_continuous", causal_kwargs,
+    )
+    _ = float(np.asarray(model.min_val_loss))
+    seconds = time.perf_counter() - start
+    draws = [
+        np.asarray(model.sample_do(
+            jax.random.key(seed + 20000 + arm), arm, mc)).reshape(-1)
+        for arm in (0, 1)
+    ]
+    return draws, seconds
+
+
 def run(args):
     # This implementation is shared with the earlier exploratory comparison.
     from compare_frugal_flows import fit_frugal_flows
@@ -146,13 +195,19 @@ def run(args):
                   f"instrument strength={args.strength_instr}", flush=True)
             if method == "frengression":
                 draws, seconds = fit_frengression(x, z, y, seed, args.fr_iters, args.mc)
+            elif method == "frugal_flows_official":
+                draws, seconds = fit_frugal_flows_official(
+                    x, z, y, seed, args.flow_epochs, args.marginal_epochs, args.mc)
             else:
                 draws, seconds = fit_frugal_flows(
                     x, z, y, seed, args.flow_epochs, args.marginal_epochs, args.mc)
             row = dict(seed=seed, n=args.n, strength_instr=args.strength_instr,
                        method=method, seconds=seconds,
                        fr_iters=args.fr_iters if method == "frengression" else "",
-                       flow_epochs=args.flow_epochs if method == "frugal_flows" else "",
+                       flow_epochs=args.flow_epochs if method != "frengression" else "",
+                       ff_config=("benchmarking_default_10d" if method == "frugal_flows_official"
+                                  else "compact_exploratory" if method == "frugal_flows"
+                                  else ""),
                        **score(draws[0], draws[1]))
             print(row, flush=True)
             rows.append(row)
@@ -173,11 +228,13 @@ def cli():
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--strength-instr", type=float, default=0.0)
     parser.add_argument("--fr-iters", type=int, default=1000)
-    parser.add_argument("--flow-epochs", type=int, default=2000)
+    parser.add_argument("--flow-epochs", type=int, default=1000)
     parser.add_argument("--marginal-epochs", type=int, default=400)
     parser.add_argument("--mc", type=int, default=10000)
-    parser.add_argument("--methods", nargs="+", choices=("frengression", "frugal_flows"),
-                        default=["frengression", "frugal_flows"])
+    parser.add_argument("--methods", nargs="+",
+                        choices=("frengression", "frugal_flows",
+                                 "frugal_flows_official"),
+                        default=["frengression", "frugal_flows_official"])
     parser.add_argument("--output", default="causl_ff_comparison.csv")
     args = parser.parse_args()
     if min(args.n, args.repeats, args.fr_iters, args.flow_epochs,
