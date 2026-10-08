@@ -1,5 +1,11 @@
 # Focused comparison for the JMLR manuscript
 
+For a VS Code/Jupyter workflow, open `examples/compare_frugal_flows.ipynb`,
+select the Python environment, and choose **Run All**. The notebook installs
+missing packages, runs a small wiring check and then the full comparison by
+default; set `RUN_FULL = False` in its settings cell to stop after the quick
+check. Results are saved to `examples/benchmark_outputs/`.
+
 `compare_frugal_flows.py` fits both released implementations on exactly the
 same observational draws. Treatment is binary and the scalar outcome has a
 non-Gaussian intervention distribution. Frugal Flows is fitted with its
