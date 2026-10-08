@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import inspect
 import sys
 import time
 from pathlib import Path
@@ -125,7 +126,12 @@ def fit_frengression(x, z, y, seed: int, iterations: int, mc: int):
 def fit_frugal_flows(x, z, y, seed: int, epochs: int, marginal_epochs: int, mc: int):
     import jax
     import jax.numpy as jnp
+    from flowjax.train import fit_to_data
     from frugal_flows.benchmarking import FrugalFlowModel
+
+    if "data" not in inspect.signature(fit_to_data).parameters:
+        raise RuntimeError("Incompatible FlowJAX: Frugal Flows requires fit_to_data(data=...). "
+                           "Install flowjax==19.1.0 in this kernel and restart it.")
 
     jax.config.update("jax_enable_x64", True)
     model = FrugalFlowModel(Y=jnp.asarray(y, dtype=jnp.float64),
