@@ -20,12 +20,15 @@ the `f,h` fit and excludes its observational-past generator `g`.
 
 The optional `--multivariate` arm fits Frengression jointly to a two-dimensional
 outcome and compares it to two independently fitted scalar Frengression models
-on the same data. It scores the *joint* intervention law (energy distance, mean
-error, covariance error). The independent-margin reference cannot reproduce
-cross-outcome dependence by construction; the comparison tests whether the joint
-fit learns it. Label the Frugal Flows entry “not implemented in the released
-scalar-outcome pipeline”; do not record it as a failed fit or as a performance
-win. This is a scope demonstration, separate from the shared-setting comparison.
+on the same data. Add `--multivariate-ff` to fit two scalar Frugal Flows on
+those data as another independent-margin reference (two extra fits per seed).
+All rows score joint energy, mean error, covariance error, cross-covariance
+error, and average marginal Wasserstein distance. Check marginal error before
+interpreting a joint gap: it may reflect scalar fit differences as well as
+missing dependence. A product of scalar margins cannot reproduce cross-outcome
+dependence by construction. **This is not a joint Frugal Flows model** and is
+not a numerical victory over one. A capable joint-outcome baseline would be
+needed to argue broad multivariate superiority.
 
 ## Run
 
@@ -40,6 +43,10 @@ python compare_frugal_flows.py --n 200 --repeats 1 --fr-iters 20 \
 
 python compare_frugal_flows.py --n 2000 --repeats 5 --multivariate \
   --output comparison_results.csv
+
+# Optional: substantially more training, including two extra scalar flows per seed.
+python compare_frugal_flows.py --n 2000 --repeats 5 --multivariate \
+  --multivariate-ff --output comparison_with_ff_margins.csv
 ```
 
 The first command only checks the end-to-end wiring. The second is a proposed
