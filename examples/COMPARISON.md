@@ -1,70 +1,59 @@
-# Focused comparison for the JMLR manuscript
+# Frugal Flows comparison on the paper's binary ATE experiment
 
-For a VS Code/Jupyter workflow, open `examples/compare_frugal_flows.ipynb`,
-select the Python environment, and choose **Run All**. The notebook installs
-missing packages, runs a 20-step wiring check and a one-seed pilot with 1,000
-Frengression iterations by default. It deliberately hides accuracy numbers
-from the wiring check. Inspect the pilot's signed ATE and arm means, then set
-`RUN_FULL = True` in its settings cell for the five-seed run (2,000 Frengression
-iterations). Results are saved to `examples/benchmark_outputs/`.
+Open `examples/compare_frugal_flows.ipynb` in VS Code. The notebook calls
+`compare_frugal_flows_causl.py`, which adds Frugal Flows to the **existing**
+binary experiment in `xwshen51/frengression/paper_exp/binary.ipynb`.
+The included `causl_binary.R` retains its `data.causl` R function and
+parameters: five instruments, five confounders, no other covariates,
+binary treatment, n=5,000, ATE=2, and instrument strengths 0–2 by 0.5.
+Frengression uses the paper's three layers, hidden width 100, noise dimension
+1, learning rate 1e-4, and 1,000 updates. Both methods receive the same
+observational draw for every seed and instrument strength.
 
-`compare_frugal_flows.py` fits both released implementations on exactly the
-same observational draws. Treatment is binary and the scalar outcome has a
-non-Gaussian intervention distribution. Frugal Flows is fitted with its
-`flexible_continuous` margin, not its more restrictive Gaussian margin. The
-reference intervention samples come from a separate draw of the known DGP.
+Install R and the `causl` R package before running the notebook:
 
-Report the mean and standard deviation over independent seeds of: absolute ATE
-error, average per-arm Wasserstein distance, average per-arm energy distance,
-and average 10th/50th/90th quantile error. The fit time is diagnostic only:
-Frugal Flows includes marginal-CDF fitting, while the Frengression timing covers
-the `f,h` fit and excludes its observational-past generator `g`.
-
-The optional `--multivariate` arm fits Frengression jointly to a two-dimensional
-outcome and compares it to two independently fitted scalar Frengression models
-on the same data. Add `--multivariate-ff` to fit two scalar Frugal Flows on
-those data as another independent-margin reference (two extra fits per seed).
-All rows score joint energy, mean error, covariance error, cross-covariance
-error, and average marginal Wasserstein distance. Check marginal error before
-interpreting a joint gap: it may reflect scalar fit differences as well as
-missing dependence. A product of scalar margins cannot reproduce cross-outcome
-dependence by construction. **This is not a joint Frugal Flows model** and is
-not a numerical victory over one. A capable joint-outcome baseline would be
-needed to argue broad multivariate superiority.
-
-## Run
-
-Create an environment with Python, PyTorch, `engression`, NumPy, SciPy, JAX,
-FlowJAX, Equinox and Optax, then install this repository and the official
-`llaurabatt/frugal-flows` repository in editable mode. Run from `examples/`:
-Frugal Flows' `environment.yaml` pins `flowjax==19.1.0` and
-`lineax==0.1.0`; older FlowJAX builds lack the `fit_to_data(data=...)` API
-its current code uses. The notebook setup checks and installs those versions
-in its selected kernel. Restart the kernel after changing package versions.
-
-```bash
-python compare_frugal_flows.py --n 200 --repeats 1 --fr-iters 20 \
-  --flow-epochs 20 --marginal-epochs 20 --mc 100 --truth-mc 1000 \
-  --output smoke.csv
-
-python compare_frugal_flows.py --n 1000 --repeats 1 --fr-iters 1000 \
-  --flow-epochs 400 --marginal-epochs 100 --mc 1000 --truth-mc 20000 \
-  --output pilot.csv
-
-python compare_frugal_flows.py --n 2000 --repeats 5 --multivariate \
-  --output comparison_results.csv
-
-# Optional: substantially more training, including two extra scalar flows per seed.
-python compare_frugal_flows.py --n 2000 --repeats 5 --multivariate \
-  --multivariate-ff --output comparison_with_ff_margins.csv
+```r
+install.packages("remotes")
+remotes::install_github("rje42/causl")
 ```
 
-The first command only checks the end-to-end wiring; 20 iterations cannot
-establish Frengression accuracy. The second is a one-seed pilot, and the third
-is a proposed benchmark, not an already completed experiment. Inspect fit
-diagnostics and convergence on the pilot before fixing final epochs and seeds,
-and report the hardware and package commits. Do not add numerical conclusions
-to the paper until the results exist.
+Select a Python kernel for this checkout. The notebook setup cell checks R and
+installs missing Python packages, including Frugal Flows with its documented
+`flowjax==19.1.0` dependency. Restart the kernel after dependency changes.
+
+The causal outcome margins specified in the R DGP are N(0,1) and N(2,1).
+The code uses their exact ATE, means, and analytic Gaussian quantiles and
+distribution distances. It never estimates truth by drawing a separate
+intervention sample. The fitted models still require finite model draws to
+estimate their own means, so report `model_draw_ate_se` and use a sufficiently
+large `mc` (10,000 by default). A one-seed pilot runs by default; set
+`RUN_FR_DIAGNOSTIC=True` for an optional 2,000-update Frengression fit on
+the same data. Set `RUN_FULL=True` only after checking the pilot: it runs
+the original five-level instrument-strength grid with 30 repetitions per
+level for both methods and can take considerable time.
+
+Command-line equivalent for one strength and one seed:
+
+```bash
+python examples/compare_frugal_flows_causl.py --n 5000 --repeats 1 \
+  --strength-instr 0 --fr-iters 1000 --flow-epochs 2000 \
+  --marginal-epochs 400 --mc 10000 \
+  --output examples/benchmark_outputs/causl_pilot.csv
+```
+
+The `seconds` column is diagnostic: Frugal Flows fits covariate marginals
+and its causal flow, whereas Frengression here fits only its f/h components.
+For publication, report signed ATE bias, RMSE, MAE, marginal distribution
+metrics, and variation over seeds at each instrument strength. Retain
+competitor wins. Do not present the earlier pilot with 3 covariates,
+`noise_dim=8`, and Monte Carlo truth as a paper comparison.
+
+The older `compare_frugal_flows.py` remains available as an exploratory
+custom-DGP example and provides the shared Frugal Flows fitting function.
+Its optional two-outcome experiment compares joint Frengression against
+products of separately fitted scalar margins; this is not a joint Frugal
+Flows baseline. A separate joint-outcome experiment and a capable joint
+baseline are needed for a multivariate superiority claim.
 
 ## Existing continuous-treatment figure
 
