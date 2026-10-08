@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -22,6 +23,12 @@ import numpy as np
 from scipy.special import expit
 from scipy.spatial.distance import cdist, pdist
 from scipy.stats import energy_distance, wasserstein_distance
+
+# When run directly from a checkout, use its src-layout package even if the
+# notebook kernel has not registered an editable install yet.
+_source_root = Path(__file__).resolve().parents[1] / "src"
+if (_source_root / "frengression" / "__init__.py").is_file():
+    sys.path.insert(0, str(_source_root))
 
 
 def simulate(n: int, seed: int, intervention: Optional[int] = None, dim: int = 1):
