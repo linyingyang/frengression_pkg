@@ -12,9 +12,12 @@ and average 10th/50th/90th quantile error. The fit time is diagnostic only:
 Frugal Flows includes marginal-CDF fitting, while the Frengression timing covers
 the `f,h` fit and excludes its observational-past generator `g`.
 
-The optional `--multivariate` arm fits **only** Frengression to a two-dimensional
-outcome and scores the *joint* intervention law (energy distance, mean error,
-covariance error). Label the Frugal Flows entry “not implemented in the released
+The optional `--multivariate` arm fits Frengression jointly to a two-dimensional
+outcome and compares it to two independently fitted scalar Frengression models
+on the same data. It scores the *joint* intervention law (energy distance, mean
+error, covariance error). The independent-margin reference cannot reproduce
+cross-outcome dependence by construction; the comparison tests whether the joint
+fit learns it. Label the Frugal Flows entry “not implemented in the released
 scalar-outcome pipeline”; do not record it as a failed fit or as a performance
 win. This is a scope demonstration, separate from the shared-setting comparison.
 
