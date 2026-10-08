@@ -11,3 +11,6 @@ examples/random.ipynb
 examples/random copy.ipynb
 examples/fakedataset_simcausal_complex.csv
 examples/frengression_ex.ipynb
+
+# Local experiment outputs; keep benchmark results out of commits.
+examples/benchmark_outputs/
