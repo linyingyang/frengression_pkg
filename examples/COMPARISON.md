@@ -35,6 +35,10 @@ needed to argue broad multivariate superiority.
 Create an environment with Python, PyTorch, `engression`, NumPy, SciPy, JAX,
 FlowJAX, Equinox and Optax, then install this repository and the official
 `llaurabatt/frugal-flows` repository in editable mode. Run from `examples/`:
+Frugal Flows' `environment.yaml` pins `flowjax==19.1.0` and
+`lineax==0.1.0`; older FlowJAX builds lack the `fit_to_data(data=...)` API
+its current code uses. The notebook setup checks and installs those versions
+in its selected kernel. Restart the kernel after changing package versions.
 
 ```bash
 python compare_frugal_flows.py --n 200 --repeats 1 --fr-iters 20 \
