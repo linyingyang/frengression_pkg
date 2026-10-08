@@ -2,8 +2,9 @@
 
 Both methods fit the same simulated observational data with a binary treatment.
 The scalar experiment scores the *whole* fitted interventional distribution,
-not just the ATE. The optional two-outcome experiment evaluates Frengression
-alone: the released FrugalFlowModel pipeline has a scalar outcome margin.
+not just the ATE. The optional two-outcome experiment compares one joint
+Frengression fit with two independent one-outcome Frengression fits: the released
+FrugalFlowModel pipeline has a scalar outcome margin.
 
 Run with the frengression and frugal-flows repositories installed. No result
 is included in this script; training must be run before reporting numbers.
@@ -146,16 +147,33 @@ def run(args):
                               intervention=arm, dim=2)[2] for arm in (0, 1)]
             draws2, seconds = fit_frengression(x2, z2, y2, seed + 500000,
                                                 args.fr_iters, args.mc)
-            rows.append(dict(seed=seed, setting="binary_two_outcomes", method="frengression",
-                             seconds=seconds,
-                             joint_energy_mean=np.mean([multivariate_energy(d, t)
-                                                        for d, t in zip(draws2, true2)]),
-                             mean_error=np.mean([np.abs(d.mean(0) - t.mean(0)).mean()
-                                                 for d, t in zip(draws2, true2)]),
-                             covariance_error=np.mean([np.linalg.norm(np.cov(d, rowvar=False)
-                                                                     - np.cov(t, rowvar=False), ord="fro")
-                                                       for d, t in zip(draws2, true2)])))
-            print(rows[-1], flush=True)
+            # A product-of-margins reference is trained on the same data. It can
+            # fit each outcome margin, but sampling independently loses their
+            # interventional dependence; this tests the value of joint fitting.
+            separate = []
+            separate_seconds = 0.0
+            for coordinate in range(2):
+                arm_draws, fit_seconds = fit_frengression(
+                    x2, z2, y2[:, coordinate:coordinate + 1],
+                    seed + 600000 + coordinate, args.fr_iters, args.mc)
+                separate.append(arm_draws)
+                separate_seconds += fit_seconds
+            independent_draws = [np.concatenate((separate[0][arm], separate[1][arm]), axis=1)
+                                 for arm in (0, 1)]
+            for method, method_draws, fit_seconds in (
+                ("frengression_joint", draws2, seconds),
+                ("frengression_independent_margins", independent_draws, separate_seconds),
+            ):
+                rows.append(dict(seed=seed, setting="binary_two_outcomes", method=method,
+                                 seconds=fit_seconds,
+                                 joint_energy_mean=np.mean([multivariate_energy(d, t)
+                                                            for d, t in zip(method_draws, true2)]),
+                                 mean_error=np.mean([np.abs(d.mean(0) - t.mean(0)).mean()
+                                                     for d, t in zip(method_draws, true2)]),
+                                 covariance_error=np.mean([np.linalg.norm(np.cov(d, rowvar=False)
+                                                                         - np.cov(t, rowvar=False), ord="fro")
+                                                           for d, t in zip(method_draws, true2)])))
+                print(rows[-1], flush=True)
 
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
