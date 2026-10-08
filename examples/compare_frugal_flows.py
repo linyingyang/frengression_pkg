@@ -58,6 +58,12 @@ def score_scalar(draw0, draw1, truth0, truth1):
     true_ate = float(truth1.mean() - truth0.mean())
     est_ate = float(draw1.mean() - draw0.mean())
     return {
+        "true_ate": true_ate,
+        "estimated_ate": est_ate,
+        "true_mean0": float(truth0.mean()),
+        "true_mean1": float(truth1.mean()),
+        "estimated_mean0": float(draw0.mean()),
+        "estimated_mean1": float(draw1.mean()),
         "ate_error": abs(est_ate - true_ate),
         "wasserstein_mean": 0.5 * (wasserstein_distance(draw0, truth0) + wasserstein_distance(draw1, truth1)),
         "energy_mean": 0.5 * (energy_distance(draw0, truth0) + energy_distance(draw1, truth1)),
