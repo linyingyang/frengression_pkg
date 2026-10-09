@@ -1,5 +1,5 @@
 # Joint-outcome extension of the paper's binary causl experiment.
-# Run: Rscript causl_joint_outcomes.R output.csv n seed strength_instr
+# Run: Rscript causl_joint_outcomes.R output.csv n seed strength_instr [observational|randomized]
 # The causal law is bivariate Gaussian with means (2a, -a), unit variances,
 # and correlation 0.4 under each intervention do(A=a).
 
@@ -9,13 +9,15 @@ if (!requireNamespace("causl", quietly = TRUE)) {
 library(causl)
 
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) != 4L) {
-  stop("Usage: Rscript causl_joint_outcomes.R output.csv n seed strength_instr")
+if (!(length(args) %in% c(4L, 5L))) {
+  stop("Usage: Rscript causl_joint_outcomes.R output.csv n seed strength_instr [observational|randomized]")
 }
 outfile <- args[[1]]
 n <- as.integer(args[[2]])
 seed <- as.integer(args[[3]])
 strength_instr <- as.numeric(args[[4]])
+mode <- if (length(args) == 5L) args[[5]] else "observational"
+if (!(mode %in% c("observational", "randomized"))) stop("Unknown mode")
 if (is.na(n) || n < 2L || is.na(seed) || !is.finite(strength_instr)) {
   stop("Invalid n, seed, or strength_instr")
 }
@@ -28,6 +30,9 @@ forms <- list(cov_forms,
 fam <- list(rep(1, 10), 5, c(1, 1), 1)
 pars <- setNames(lapply(cov_names, function(v) list(beta = 0, phi = 1)), cov_names)
 pars$A <- list(beta = c(0, rep(strength_instr, 5), rep(1, 5)))
+# Randomization is used solely for a separate check of the specified
+# interventional moments; it is never used to train frengression.
+if (mode == "randomized") pars$A$beta[] <- 0
 pars$Y1 <- list(beta = c(0, 2), phi = 1)
 pars$Y2 <- list(beta = c(0, -1), phi = 1)
 
