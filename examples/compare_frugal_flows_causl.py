@@ -6,20 +6,22 @@ are N(0, 1) and N(2, 1), so the ATE and all reference distribution metrics
 are calculated from their specified laws, not reference Monte Carlo samples.
 
 The two fits receive the same R-generated observational data for each seed.
-Simulation from a fitted generative model still uses finitely many draws;
-increase --mc to make this numerical evaluation error small.
+The default is 400 fitted outcome draws per arm, matching binary.ipynb.
+Sampling counts are recorded and checked before cached results are reused.
 """
 
 from __future__ import annotations
 
 import argparse
-import csv
+import json
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
+from datetime import datetime, timezone
+from importlib import metadata
 
 import numpy as np
 import pandas as pd
@@ -182,42 +184,133 @@ def fit_frugal_flows_official(x, z, y, seed: int, epochs: int,
     return draws, seconds
 
 
+RESULT_COLUMNS = [
+    'seed', 'n', 'strength_instr', 'method', 'seconds', 'fr_iters', 'flow_epochs',
+    'marginal_epochs', 'mc_draws_per_arm', 'draws0', 'draws1', 'ff_config',
+    'true_ate', 'estimated_ate', 'ate_error', 'true_mean0', 'estimated_mean0',
+    'true_mean1', 'estimated_mean1', 'wasserstein_mean', 'energy_mean',
+    'quantile_mae', 'model_draw_ate_se',
+]
+
+
+def checked_results(rows, args):
+    """Reject unknown draw counts, mismatched budgets and duplicate cache rows."""
+    if not set(RESULT_COLUMNS).issubset(rows.columns):
+        raise ValueError('Cached results lack the current sampling/settings metadata; do not reuse them')
+    if rows.empty:
+        return rows
+    if rows.duplicated(['seed', 'method']).any():
+        raise ValueError('Duplicate method/seed cache rows')
+    seeds = set(range(args.seed, args.seed + args.repeats))
+    valid = (set(rows.method).issubset(set(args.methods))
+             and set(rows.seed).issubset(seeds)
+             and (rows.n == args.n).all()
+             and np.allclose(rows.strength_instr, args.strength_instr)
+             and (rows.mc_draws_per_arm == args.mc).all()
+             and (rows.draws0 == args.mc).all() and (rows.draws1 == args.mc).all()
+             and (rows.true_ate == 2.0).all())
+    numeric = rows[['estimated_ate', 'ate_error', 'model_draw_ate_se', 'seconds',
+                    'wasserstein_mean', 'energy_mean', 'quantile_mae']].to_numpy(dtype=float)
+    valid = valid and np.isfinite(numeric).all()
+    for method, group in rows.groupby('method'):
+        if method == 'frengression':
+            valid = valid and (group.fr_iters == args.fr_iters).all()
+        else:
+            config = 'benchmarking_default_10d' if method == 'frugal_flows_official' else 'compact_exploratory'
+            valid = (valid and (group.flow_epochs == args.flow_epochs).all()
+                     and (group.marginal_epochs == args.marginal_epochs).all()
+                     and (group.ff_config == config).all())
+    if not valid:
+        raise ValueError('Cached results do not match the requested data, training or outcome draw settings')
+    return rows
+
+
+def _write_csv(frame, path):
+    temporary = path.with_suffix(path.suffix + '.tmp')
+    frame.to_csv(temporary, index=False)
+    temporary.replace(path)
+
+
 def run(args):
-    # This implementation is shared with the earlier exploratory comparison.
+    """Checkpoint each successful method; retry only missing fits on rerun."""
     from compare_frugal_flows import fit_frugal_flows
 
-    rows = []
-    for rep in range(args.repeats):
-        seed = args.seed + rep
-        x, z, y = generate_causl(args.n, seed, args.strength_instr)
-        for method in args.methods:
-            print(f"Fitting {method}: n={args.n}, p=10, seed={seed}, "
-                  f"instrument strength={args.strength_instr}", flush=True)
-            if method == "frengression":
-                draws, seconds = fit_frengression(x, z, y, seed, args.fr_iters, args.mc)
-            elif method == "frugal_flows_official":
-                draws, seconds = fit_frugal_flows_official(
-                    x, z, y, seed, args.flow_epochs, args.marginal_epochs, args.mc)
-            else:
-                draws, seconds = fit_frugal_flows(
-                    x, z, y, seed, args.flow_epochs, args.marginal_epochs, args.mc)
-            row = dict(seed=seed, n=args.n, strength_instr=args.strength_instr,
-                       method=method, seconds=seconds,
-                       fr_iters=args.fr_iters if method == "frengression" else "",
-                       flow_epochs=args.flow_epochs if method != "frengression" else "",
-                       ff_config=("benchmarking_default_10d" if method == "frugal_flows_official"
-                                  else "compact_exploratory" if method == "frugal_flows"
-                                  else ""),
-                       **score(draws[0], draws[1]))
-            print(row, flush=True)
-            rows.append(row)
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
-    with out.open("w", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
-        writer.writeheader()
-        writer.writerows(rows)
-    print(f"Wrote {len(rows)} rows to {out}")
+    cached = (checked_results(pd.read_csv(out), args) if out.is_file()
+              else pd.DataFrame(columns=RESULT_COLUMNS))
+    rows = cached.to_dict('records')
+    completed = {(int(row['seed']), row['method']) for row in rows}
+    failure_path = out.with_name(out.stem + '_failures.csv')
+    failure_columns = ['seed', 'method', 'stage', 'error', 'attempted_at_utc']
+    failures = pd.read_csv(failure_path).to_dict('records') if failure_path.is_file() else []
+
+    def fail(seed, method, stage, error):
+        failures.append(dict(seed=seed, method=method, stage=stage,
+                             error=f'{type(error).__name__}: {error}',
+                             attempted_at_utc=datetime.now(timezone.utc).isoformat()))
+        _write_csv(pd.DataFrame(failures, columns=failure_columns), failure_path)
+        print(f'Failed {method}, seed={seed}: {error}', flush=True)
+
+    versions = {}
+    for name in ('torch', 'engression', 'jax', 'flowjax', 'frugal-flows', 'numpy', 'scipy'):
+        try:
+            versions[name] = metadata.version(name)
+        except metadata.PackageNotFoundError:
+            versions[name] = None
+    commit = subprocess.run(['git', '-C', str(HERE.parent), 'rev-parse', 'HEAD'],
+                            capture_output=True, text=True)
+    info = dict(settings=vars(args), outcome_draws_per_arm=args.mc, true_ate=2.0,
+                repository_commit=commit.stdout.strip() if commit.returncode == 0 else None,
+                versions=versions,
+                sampling_note='Each ATE is mean(draw1)-mean(draw0), using mc draws per arm',
+                uncertainty_note='model_draw_ate_se is conditional on the fitted model')
+    out.with_suffix('.metadata.json').write_text(json.dumps(info, indent=2), encoding='utf-8')
+    for rep in range(args.repeats):
+        seed = args.seed + rep
+        missing = [method for method in args.methods if (seed, method) not in completed]
+        if not missing:
+            print(f'Reusing completed seed={seed}, mc={args.mc} per arm', flush=True)
+            continue
+        try:
+            x, z, y = generate_causl(args.n, seed, args.strength_instr)
+        except Exception as error:
+            fail(seed, 'data_generation', 'data_generation', error)
+            continue
+        for method in missing:
+            try:
+                print(f'Fitting {method}: n={args.n}, seed={seed}, '
+                      f'strength={args.strength_instr}, mc={args.mc} per arm', flush=True)
+                if method == 'frengression':
+                    draws, seconds = fit_frengression(x, z, y, seed, args.fr_iters, args.mc)
+                elif method == 'frugal_flows_official':
+                    draws, seconds = fit_frugal_flows_official(
+                        x, z, y, seed, args.flow_epochs, args.marginal_epochs, args.mc)
+                else:
+                    draws, seconds = fit_frugal_flows(
+                        x, z, y, seed, args.flow_epochs, args.marginal_epochs, args.mc)
+                draws = [np.asarray(draw, dtype=float).reshape(-1) for draw in draws]
+                if len(draws) != 2 or any(len(draw) != args.mc for draw in draws):
+                    raise ValueError('Fitted sampler returned an unexpected number of outcomes')
+                row = dict(seed=seed, n=args.n, strength_instr=args.strength_instr,
+                           method=method, seconds=seconds,
+                           fr_iters=args.fr_iters if method == 'frengression' else '',
+                           flow_epochs=args.flow_epochs if method != 'frengression' else '',
+                           marginal_epochs=args.marginal_epochs if method != 'frengression' else '',
+                           mc_draws_per_arm=args.mc, draws0=len(draws[0]), draws1=len(draws[1]),
+                           ff_config=('benchmarking_default_10d' if method == 'frugal_flows_official'
+                                      else 'compact_exploratory' if method == 'frugal_flows' else ''),
+                           **score(draws[0], draws[1]))
+                checked_results(pd.DataFrame([row], columns=RESULT_COLUMNS), args)
+                rows.append(row)
+                completed.add((seed, method))
+                _write_csv(pd.DataFrame(rows, columns=RESULT_COLUMNS), out)
+                print(row, flush=True)
+            except Exception as error:
+                fail(seed, method, 'fit_or_score', error)
+    _write_csv(pd.DataFrame(rows, columns=RESULT_COLUMNS), out)
+    _write_csv(pd.DataFrame(failures, columns=failure_columns), failure_path)
+    print(f'Saved {len(rows)} completed method rows to {out}', flush=True)
     return rows
 
 
@@ -230,7 +323,8 @@ def cli():
     parser.add_argument("--fr-iters", type=int, default=1000)
     parser.add_argument("--flow-epochs", type=int, default=1000)
     parser.add_argument("--marginal-epochs", type=int, default=400)
-    parser.add_argument("--mc", type=int, default=10000)
+    parser.add_argument("--mc", type=int, default=400,
+                        help="Fitted outcome draws per arm; 400 matches the paper's binary ATE experiment")
     parser.add_argument("--methods", nargs="+",
                         choices=("frengression", "frugal_flows",
                                  "frugal_flows_official"),
@@ -245,3 +339,4 @@ def cli():
 
 if __name__ == "__main__":
     cli()
+

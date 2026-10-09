@@ -25,10 +25,43 @@ changes.
 The DGP specifies causal outcome margins N(0,1) and N(2,1). The code uses
 their exact ATE, means, and analytic Gaussian distances and quantiles; it
 does not estimate truth from a Monte Carlo intervention sample. Fitted
-model means are still estimated from 10,000 model draws per arm, and the
-CSV includes `model_draw_ate_se` to measure this sampling variability.
+model means are estimated from **400 model draws per arm**, matching the
+original binary ATE notebook. The training sample remains n=5,000. The
+CSV records the requested and actual draw counts for both arms and
+`model_draw_ate_se`, which measures sampling variability conditional on
+the fitted model; it is not uncertainty from estimating the model.
 
-## Reading the five-seed results
+## Overnight Run All
+
+Restart the kernel and Run All in `examples/compare_frugal_flows.ipynb`.
+The default `RUN_FULL=True` attempts 30 seeds at each of five instrument
+strengths, fitting Frengression and the pinned official 10-D Frugal Flows
+configuration to the same observational dataset. Both use 400 outcome
+draws per arm. Optional pilots and sensitivity fits are off.
+
+Each successful method is saved immediately. Failed attempts are logged
+and the run continues; rerunning fits only missing methods. Cache checks
+reject results with unknown or mismatched draw counts or fitting settings.
+Old 10,000-draw results are not reused.
+
+Outputs are saved outside Git under `~/frengression_results/binary_ate/`:
+
+- `binary_ate_table_n5000_fr1000_ff1000_m400_mc400.csv`: RMSE, Bias and
+  MAE in the existing paper table's order.
+- `causl_full30_summary_n5000_fr1000_ff1000_m400_mc400.csv`: completed
+  repetition counts, ATE and distribution scores.
+- `causl_full30_paired_n5000_fr1000_ff1000_m400_mc400.csv`: differences
+  on complete shared-seed pairs, with descriptive bootstrap intervals.
+- `completion_*.csv`, `failures_*.csv`, per-method results and metadata:
+  progress, failed attempts, sampling settings and package versions.
+
+An independent replication batch can supply a Frugal Flows column in the
+existing table when the DGP and evaluation protocol match. State that it
+is an independent batch; paired comparisons apply only to the new fits
+on matched seeds. Check completed counts before reporting 30 repetitions.
+The full run may take longer than one night; successful fits are retained.
+
+## Earlier five-seed results
 
 The completed five-seed grid shows smaller Frengression ATE and
 distribution errors in every reported instrument-strength row **against
@@ -40,17 +73,10 @@ depth-4, four-layer copula, learning rate 5e-3, and patience 100 for
 establish a win over a sufficiently tuned Frugal Flows baseline.
 The earlier custom three-covariate pilot is not part of this comparison.
 
-The notebook now defaults to **one Frugal Flows only** official-configuration
-check (`RUN_OFFICIAL_FF_CHECK=True`) at strength 2.0, seed 2026.
-This saves a new CSV and does not rerun the Frengression fits or overwrite
-the compact results. Compare that row with the **same seed and strength**
-in the compact table, not the five-seed mean. Then set
-`RUN_GRID_PILOT=True` for five paired seeds at each strength using the
-official configuration, and eventually `RUN_FULL=True` for 30 seeds
-at each strength. Those longer runs are off by default and can take
-substantial time. Grid files are saved after each seed and reused on
-rerun; the 30-seed loop currently writes each completed strength, so
-plan its runtime before enabling it.
+The optional `RUN_OFFICIAL_FF_CHECK` and `RUN_GRID_PILOT` switches retain
+the one-seed and five-seed official-configuration checks. They are off by
+default. These checks also use the configured 400 draws per arm, so do
+not compare their finite-draw scores directly with old 10,000-draw rows.
 
 The official configuration is a documented starting point, not proof
 that a single fit is optimal. The upstream comment also recommends
@@ -65,8 +91,8 @@ The equivalent one-seed command for the official configuration is:
 ```bash
 python examples/compare_frugal_flows_causl.py --n 5000 --repeats 1 \
   --strength-instr 2 --seed 2026 --fr-iters 1000 --flow-epochs 1000 \
-  --marginal-epochs 400 --mc 10000 --methods frugal_flows_official \
-  --output examples/benchmark_outputs/causl_ffofficial_check.csv
+  --marginal-epochs 400 --mc 400 --methods frugal_flows_official \
+  --output ~/frengression_results/binary_ate/causl_ffofficial_check_mc400.csv
 ```
 
 The `seconds` column is diagnostic: Frugal Flows fits covariate
@@ -81,6 +107,27 @@ Its optional two-outcome experiment compares joint Frengression with
 products of separately fitted scalar margins, including two independent
 Frugal Flows if enabled. This is not a joint Frugal Flows baseline;
 a capable joint comparator is needed for a broad multivariate claim.
+
+## Joint-outcome overnight experiment
+
+Restart the kernel and Run All in `examples/joint_outcomes_causl.ipynb`.
+Defaults run a 1,000-update pilot and 30 paired replications of joint
+Frengression and conditional engression plus g-computation. The latter
+fits the bivariate outcome conditional on treatment and covariates, then
+averages over the covariate distribution under fixed treatment. Both
+methods generate paired outcomes together. Shuffled margins are a
+dependence ablation, not a fitted competitor or a Frugal Flows result.
+
+This separate distribution experiment keeps 5,000 generated pairs per
+arm and `noise_dim=2`. The optional 4,000-update sensitivity fit is off.
+Per-method draw checkpoints allow missing fits to resume. Reports and
+figures are saved under `~/frengression_results/joint_outcomes_causl/`,
+including moment, joint-event, joint-CDF and paired-error summaries, noise
+checks, completion counts and failure logs. PNG/PDF/SVG figures compare
+the exact law with fitted draws using common axes and density scales,
+and show paired errors across datasets. The representative distribution
+figure uses the first complete paired seed in the specified order,
+without selecting it by accuracy.
 
 ## Existing continuous-treatment figure
 
@@ -98,3 +145,4 @@ These descriptive percentiles are not confidence intervals. If the original
 per-run CausalEGM predictions were not saved, there is no sound way to recover
 them from the published aggregate figure; use mean curves without comparable
 bands or rerun that baseline to regenerate the inputs.
+
