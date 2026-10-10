@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
 from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
@@ -74,10 +75,46 @@ def _save_figure(fig, stem):
         fig.savefig(stem.with_suffix('.' + suffix), dpi=240, bbox_inches='tight')
 
 
+def _point_density(values, low, high, bandwidth, bins=140):
+    """Density colours from a common Gaussian-smoothed histogram grid.
+
+    Normalization uses the total draw count, including points outside the
+    displayed limits. The grid and bandwidth are identical across methods.
+    """
+    padding = 4 * bandwidth
+    edges = [np.linspace(low[j] - padding[j], high[j] + padding[j], bins + 1)
+             for j in (0, 1)]
+    widths = np.array([edge[1] - edge[0] for edge in edges])
+    density, _, _ = np.histogram2d(values[:, 0], values[:, 1], bins=edges)
+    density /= len(values) * np.prod(widths)
+    for axis in (0, 1):
+        sigma = bandwidth[axis] / widths[axis]
+        radius = int(np.ceil(4 * sigma))
+        offsets = np.arange(-radius, radius + 1)
+        kernel = np.exp(-0.5 * (offsets / sigma) ** 2)
+        kernel /= kernel.sum()
+        density = np.apply_along_axis(
+            lambda row: np.convolve(row, kernel, mode='same'), axis, density)
+    positions = (values - np.array([edge[0] for edge in edges])) / widths - 0.5
+    positions = np.clip(positions, 0, bins - 1)
+    lower = np.floor(positions).astype(int)
+    upper = np.minimum(lower + 1, bins - 1)
+    weight = positions - lower
+    x0, y0 = lower.T
+    x1, y1 = upper.T
+    wx, wy = weight.T
+    return ((1 - wx) * (1 - wy) * density[x0, y0]
+            + wx * (1 - wy) * density[x1, y0]
+            + (1 - wx) * wy * density[x0, y1]
+            + wx * wy * density[x1, y1])
+
+
 def plot_joint_distributions(methods, means, covariance, stem, title=None):
     """Joint samples with exact Gaussian regions and sample-moment ellipses.
 
-    All methods use the same axes, point size, opacity and curve colours.
+    All methods use the same axes, point size, opacity and density colour scale.
+    Colours use a Gaussian-smoothed histogram with a common bandwidth of
+    0.18 times the true marginal standard deviations; fitting is unchanged.
     The solid ellipses describe sample means/covariances, not empirical
     coverage regions for a potentially non-Gaussian fitted distribution.
     """
@@ -95,6 +132,11 @@ def plot_joint_distributions(methods, means, covariance, stem, title=None):
     sd = np.sqrt(np.diag(covariance))
     low = np.min([means[a] - 3.6 * sd for a in (0, 1)], axis=0)
     high = np.max([means[a] + 3.6 * sd for a in (0, 1)], axis=0)
+    point_colours = {(method, arm): _point_density(
+        _draws(methods[method][arm]), low, high, 0.18 * sd)
+        for method in order for arm in (0, 1)}
+    norm = Normalize(vmin=0, vmax=max(float(values.max())
+                                     for values in point_colours.values()))
     theta = np.linspace(0, 2 * np.pi, 300)
     unit = np.stack((np.cos(theta), np.sin(theta)))
 
@@ -105,22 +147,25 @@ def plot_joint_distributions(methods, means, covariance, stem, title=None):
         return (vecs @ np.diag(np.sqrt(vals)) @ unit
                 * np.sqrt(-2 * np.log(1 - mass)) + mean[:, None])
 
-    truth_colour, fitted_colour = '#252525', '#0072B2'
+    truth_colour, fitted_colour = '#252525', '#E76F51'
     with plt.rc_context({'font.size': 10.5, 'axes.titlesize': 11.5, 'axes.labelsize': 11,
                          'axes.spines.top': False, 'axes.spines.right': False,
                          'axes.facecolor': 'white', 'figure.facecolor': 'white'}):
-        fig, axes = plt.subplots(2, len(order), figsize=(3.15 * len(order), 6.5),
+        fig, axes = plt.subplots(2, len(order), figsize=(3.35 * len(order) + 0.35, 6.5),
                                  sharex=True, sharey=True, squeeze=False)
         for arm in (0, 1):
             for column, method in enumerate(order):
                 ax = axes[arm, column]
                 values = _draws(methods[method][arm])
                 fitted_mean, fitted_cov = values.mean(axis=0), np.cov(values, rowvar=False)
-                ax.scatter(values[:, 0], values[:, 1], s=4, alpha=0.15,
-                           color='#65798A', edgecolors='none', rasterized=True, zorder=1)
+                density = point_colours[method, arm]
+                drawing_order = np.argsort(density, kind='stable')
+                scatter = ax.scatter(values[drawing_order, 0], values[drawing_order, 1],
+                           c=density[drawing_order], cmap='viridis', norm=norm,
+                           s=4, alpha=0.65, edgecolors='none', rasterized=True, zorder=1)
                 for mass in (0.5, 0.95):
                     ax.plot(*ellipse(fitted_mean, fitted_cov, mass),
-                            color=fitted_colour, linewidth=1.8, zorder=3)
+                            color=fitted_colour, linewidth=1.9, zorder=3)
                     ax.plot(*ellipse(np.asarray(means[arm]), covariance, mass),
                             color=truth_colour, linewidth=1.5, linestyle='--', zorder=4)
                 cov_error = np.linalg.norm(fitted_cov - covariance, ord='fro')
@@ -143,8 +188,15 @@ def plot_joint_distributions(methods, means, covariance, stem, title=None):
                    fontsize=10, bbox_to_anchor=(0.5, 0.005))
         if title:
             fig.suptitle(title, fontsize=13)
-        fig.subplots_adjust(left=0.08, right=0.99, bottom=0.105,
+        fig.subplots_adjust(left=0.075, right=0.915, bottom=0.105,
                             top=0.88 if title else 0.92, wspace=0.12, hspace=0.15)
+        colour_axis = fig.add_axes([0.94, 0.19, 0.014, 0.63])
+        # An opaque mappable keeps the colour bar faithful to the common scale.
+        colour_bar = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap='viridis'),
+                                  cax=colour_axis)
+        colour_bar.set_label('Joint density (smoothed)', labelpad=8)
+        colour_bar.outline.set_visible(False)
+        colour_bar.ax.tick_params(labelsize=9, length=3)
         _save_figure(fig, stem)
     return fig
 
