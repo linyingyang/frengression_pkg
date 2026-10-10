@@ -72,7 +72,8 @@ def _save_figure(fig, stem):
     stem = Path(stem)
     stem.parent.mkdir(parents=True, exist_ok=True)
     for suffix in ('png', 'pdf', 'svg'):
-        fig.savefig(stem.with_suffix('.' + suffix), dpi=240, bbox_inches='tight')
+        fig.savefig(stem.with_suffix('.' + suffix),
+                    dpi=180 if suffix == 'pdf' else 240, bbox_inches='tight')
 
 
 def _point_density(values, low, high, bandwidth, bins=140):
@@ -201,13 +202,16 @@ def plot_joint_distributions(methods, means, covariance, stem, title=None):
     return fig
 
 
-def redraw_saved_joint_report(result_dir):
+def redraw_saved_joint_report(result_dir, illustration_seed=None):
     """Redraw completed experiments from checkpoints; no R, torch or fitting."""
     result_dir = Path(result_dir)
     metadata = json.loads((result_dir / 'metadata.json').read_text())
+    if illustration_seed is not None and illustration_seed not in metadata['seeds']:
+        raise ValueError('Illustration seed is not part of the recorded experiment')
+    seeds = metadata['seeds'] if illustration_seed is None else [illustration_seed]
     methods = ('frengression_joint', 'conditional_engression_gcomp')
     representative = None
-    for seed in metadata['seeds']:
+    for seed in seeds:
         if not all((result_dir / f'seed{seed}_{method}.npz').is_file() for method in methods):
             continue
         draws = {}
@@ -232,8 +236,18 @@ def redraw_saved_joint_report(result_dir):
         raise ValueError('No complete paired checkpoints found in the prespecified seed order')
     means = {int(arm): np.asarray(mean, dtype=float)
              for arm, mean in metadata['true_mean'].items()}
+    stem = result_dir / ('joint_distributions' if illustration_seed is None
+                         else f'joint_distributions_seed{illustration_seed}')
     figures = [plot_joint_distributions(representative, means,
-        np.asarray(metadata['true_covariance'], dtype=float), result_dir / 'joint_distributions')]
+        np.asarray(metadata['true_covariance'], dtype=float), stem)]
+    stem.with_suffix('.json').write_text(json.dumps({
+        'seed': seed,
+        'selection': ('first complete pair in prespecified seed order'
+                      if illustration_seed is None else 'explicitly requested completed seed'),
+        'n_draws_per_arm': metadata['mc_draws'],
+        'n_planned_replications': len(metadata['seeds']),
+        'aggregate_scores': 'scores.csv',
+    }, indent=2))
     scores_path = result_dir / 'scores.csv'
     if scores_path.is_file():
         paired = plot_paired_errors(pd.read_csv(scores_path), result_dir / 'paired_error_comparison')
