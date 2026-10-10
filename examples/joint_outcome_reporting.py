@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-from matplotlib.colors import Normalize
+from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
 
@@ -75,11 +75,16 @@ def _save_figure(fig, stem):
 
 
 def plot_joint_distributions(methods, means, covariance, stem, title=None):
-    """Shared axes/density scale; exact contours and unsmoothed model histograms."""
+    """Joint samples with exact Gaussian regions and sample-moment ellipses.
+
+    All methods use the same axes, point size, opacity and curve colours.
+    The solid ellipses describe sample means/covariances, not empirical
+    coverage regions for a potentially non-Gaussian fitted distribution.
+    """
     labels = {
         'frengression_joint': 'Frengression',
         'conditional_engression_gcomp': 'Conditional engression\n+ g-computation',
-        'shuffled_diagnostic': 'Shuffled margins',
+        'shuffled_diagnostic': 'Shuffled pairs',
     }
     order = [name for name in labels if name in methods]
     if not order:
@@ -90,64 +95,99 @@ def plot_joint_distributions(methods, means, covariance, stem, title=None):
     sd = np.sqrt(np.diag(covariance))
     low = np.min([means[a] - 3.6 * sd for a in (0, 1)], axis=0)
     high = np.max([means[a] + 3.6 * sd for a in (0, 1)], axis=0)
-    edges = [np.linspace(low[j], high[j], 49) for j in range(2)]
-    centers = [(edge[:-1] + edge[1:]) / 2 for edge in edges]
-    xx, yy = np.meshgrid(*centers, indexing='ij')
-    inverse = np.linalg.inv(covariance)
-    scale = 1 / (2 * np.pi * np.sqrt(np.linalg.det(covariance)))
-    densities, samples = {}, {}
-    for arm in (0, 1):
-        delta = np.stack((xx - means[arm][0], yy - means[arm][1]), axis=-1)
-        densities[arm, 'truth'] = scale * np.exp(-0.5 * np.einsum('...i,ij,...j->...', delta, inverse, delta))
-        for method in order:
-            values = _draws(methods[method][arm])
-            samples[arm, method] = values
-            counts, _, _ = np.histogram2d(values[:, 0], values[:, 1], bins=edges)
-            # Divide by the full draw count, without renormalising omitted tails.
-            densities[arm, method] = counts / (len(values) * np.diff(edges[0])[:, None]
-                                                     * np.diff(edges[1])[None, :])
-    norm = Normalize(0, max(float(d.max()) for d in densities.values()))
-    with plt.rc_context({'font.size': 10, 'axes.titlesize': 11, 'axes.labelsize': 11,
-                         'axes.spines.top': False, 'axes.spines.right': False}):
-        fig, axes = plt.subplots(2, len(order) + 1, figsize=(3.4 * (len(order) + 1), 6.7),
-                                 sharex=True, sharey=True, constrained_layout=True)
-        theta = np.linspace(0, 2 * np.pi, 300)
-        vals, vecs = np.linalg.eigh(covariance)
-        unit = np.stack((np.cos(theta), np.sin(theta)))
-        columns = ['truth', *order]
-        rho = covariance[0, 1] / np.sqrt(covariance[0, 0] * covariance[1, 1])
-        median_truth = 0.25 + np.arcsin(rho) / (2 * np.pi)
+    theta = np.linspace(0, 2 * np.pi, 300)
+    unit = np.stack((np.cos(theta), np.sin(theta)))
+
+    def ellipse(mean, cov, mass):
+        vals, vecs = np.linalg.eigh(cov)
+        if vals.min() <= 0:
+            raise ValueError('Expected nondegenerate joint samples')
+        return (vecs @ np.diag(np.sqrt(vals)) @ unit
+                * np.sqrt(-2 * np.log(1 - mass)) + mean[:, None])
+
+    truth_colour, fitted_colour = '#252525', '#0072B2'
+    with plt.rc_context({'font.size': 10.5, 'axes.titlesize': 11.5, 'axes.labelsize': 11,
+                         'axes.spines.top': False, 'axes.spines.right': False,
+                         'axes.facecolor': 'white', 'figure.facecolor': 'white'}):
+        fig, axes = plt.subplots(2, len(order), figsize=(3.15 * len(order), 6.5),
+                                 sharex=True, sharey=True, squeeze=False)
         for arm in (0, 1):
-            for column, method in enumerate(columns):
+            for column, method in enumerate(order):
                 ax = axes[arm, column]
-                mesh = ax.pcolormesh(edges[0], edges[1], densities[arm, method].T,
-                                     cmap='viridis', norm=norm, shading='flat', rasterized=True)
-                for mass, style in ((0.5, '--'), (0.95, '-')):
-                    ellipse = (vecs @ np.diag(np.sqrt(vals)) @ unit
-                               * np.sqrt(-2 * np.log(1 - mass)) + means[arm][:, None])
-                    ax.plot(*ellipse, color='white', linewidth=1.2, linestyle=style)
-                if method == 'truth':
-                    cov12, probability = covariance[0, 1], median_truth
-                else:
-                    values = samples[arm, method]
-                    cov12 = np.cov(values, rowvar=False)[0, 1]
-                    probability = np.mean(np.all(values > means[arm], axis=1))
-                ax.text(0.04, 0.04, f'Cov = {cov12:.3f}\nP(both above medians) = {probability:.3f}',
-                        transform=ax.transAxes, fontsize=8.5, va='bottom',
-                        bbox={'facecolor': 'white', 'alpha': 0.92, 'edgecolor': 'none', 'pad': 4})
+                values = _draws(methods[method][arm])
+                fitted_mean, fitted_cov = values.mean(axis=0), np.cov(values, rowvar=False)
+                ax.scatter(values[:, 0], values[:, 1], s=4, alpha=0.15,
+                           color='#65798A', edgecolors='none', rasterized=True, zorder=1)
+                for mass in (0.5, 0.95):
+                    ax.plot(*ellipse(fitted_mean, fitted_cov, mass),
+                            color=fitted_colour, linewidth=1.8, zorder=3)
+                    ax.plot(*ellipse(np.asarray(means[arm]), covariance, mass),
+                            color=truth_colour, linewidth=1.5, linestyle='--', zorder=4)
+                cov_error = np.linalg.norm(fitted_cov - covariance, ord='fro')
+                ax.text(0.04, 0.04, f'Covariance error = {cov_error:.3f}',
+                        transform=ax.transAxes, fontsize=9.5, va='bottom',
+                        bbox={'facecolor': 'white', 'alpha': 0.92, 'edgecolor': 'none', 'pad': 2})
                 ax.set_aspect('equal', adjustable='box')
                 ax.set_xlim(low[0], high[0]); ax.set_ylim(low[1], high[1])
                 if arm == 0:
-                    ax.set_title('Exact distribution' if method == 'truth' else labels[method], pad=9)
+                    ax.set_title(labels[method], pad=10)
                 if column == 0:
                     ax.set_ylabel(f'do(X={arm})\n$Y_2$')
                 if arm == 1:
                     ax.set_xlabel('$Y_1$')
-        fig.colorbar(mesh, ax=axes, shrink=0.82, label='Joint density', pad=0.015)
-        fig.suptitle(title or 'Joint outcome distributions under intervention', fontsize=14)
-        fig.supxlabel('White contours: exact 50% (dashed) and 95% (solid) Gaussian regions', fontsize=9)
+        handles = [Line2D([], [], color=truth_colour, linestyle='--', linewidth=1.5,
+                          label='True Gaussian regions'),
+                   Line2D([], [], color=fitted_colour, linewidth=1.8,
+                          label='Sample mean/covariance ellipses')]
+        fig.legend(handles=handles, loc='lower center', ncol=2, frameon=False,
+                   fontsize=10, bbox_to_anchor=(0.5, 0.005))
+        if title:
+            fig.suptitle(title, fontsize=13)
+        fig.subplots_adjust(left=0.08, right=0.99, bottom=0.105,
+                            top=0.88 if title else 0.92, wspace=0.12, hspace=0.15)
         _save_figure(fig, stem)
     return fig
+
+
+def redraw_saved_joint_report(result_dir):
+    """Redraw completed experiments from checkpoints; no R, torch or fitting."""
+    result_dir = Path(result_dir)
+    metadata = json.loads((result_dir / 'metadata.json').read_text())
+    methods = ('frengression_joint', 'conditional_engression_gcomp')
+    representative = None
+    for seed in metadata['seeds']:
+        if not all((result_dir / f'seed{seed}_{method}.npz').is_file() for method in methods):
+            continue
+        draws = {}
+        for method in methods:
+            protocol = dict(format=2, n=metadata['n'], seed=seed,
+                strength=metadata['instrument_strength'], method=method,
+                fr_iters=metadata['frengression_updates'], gcomp_iters=metadata['gcomp_updates'],
+                mc_draws=metadata['mc_draws'], layers=metadata['layers'],
+                width=metadata['width'], noise_dim=metadata['noise_dim'],
+                learning_rate=metadata['learning_rate'],
+                model_source_sha256=metadata['model_source_sha256'])
+            cached = load_draw_checkpoint(result_dir / f'seed{seed}_{method}.npz', protocol)
+            draws[method] = cached[0]
+        rng = np.random.default_rng(seed + 99)
+        draws['shuffled_diagnostic'] = {
+            arm: np.column_stack((draws['frengression_joint'][arm][:, 0],
+                                  rng.permutation(draws['frengression_joint'][arm][:, 1])))
+            for arm in (0, 1)}
+        representative = draws
+        break
+    if representative is None:
+        raise ValueError('No complete paired checkpoints found in the prespecified seed order')
+    means = {int(arm): np.asarray(mean, dtype=float)
+             for arm, mean in metadata['true_mean'].items()}
+    figures = [plot_joint_distributions(representative, means,
+        np.asarray(metadata['true_covariance'], dtype=float), result_dir / 'joint_distributions')]
+    scores_path = result_dir / 'scores.csv'
+    if scores_path.is_file():
+        paired = plot_paired_errors(pd.read_csv(scores_path), result_dir / 'paired_error_comparison')
+        if paired is not None:
+            figures.append(paired)
+    return figures
 
 
 def plot_paired_errors(results, stem, title=None):
@@ -178,7 +218,8 @@ def plot_paired_errors(results, stem, title=None):
                    xlabel='Frengression error', ylabel='Conditional engression error')
             ax.set_aspect('equal', adjustable='box')
         axes[0].legend(frameon=False)
-        fig.suptitle(title or 'Paired comparison across independently generated datasets', fontsize=12)
-        fig.supxlabel('Above the diagonal: smaller Frengression error. Each point is one arm of one dataset.', fontsize=9)
+        if title:
+            fig.suptitle(title, fontsize=12)
+        fig.supxlabel('Above the diagonal: lower Frengression error', fontsize=9)
         _save_figure(fig, stem)
     return fig
