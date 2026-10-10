@@ -249,8 +249,7 @@ class FrengressionSeq(torch.nn.Module):
             if x is not None:
                 sxz_p = torch.cat([s, x[:,:(t*self.x_dim)], z[:,:(t*self.z_dim)]], dim=1)
             else:
-                # sxz_p = torch.cat([s, x_all[:,:(t*self.x_dim)], z_all[:,:(t*self.z_dim)]], dim=1)
-                sxz_p = torch.cat([s, x_all[t-1], z_all[t-1]], dim=1)
+                sxz_p = torch.cat([s, *x_all, *z_all], dim=1)
  
             xz = self.model_xz[t](sxz_p)
             xt = xz[:, :self.x_dim]
