@@ -243,9 +243,15 @@ def redraw_saved_joint_report(result_dir):
 
 
 def plot_paired_errors(results, stem, title=None):
-    """One point per paired dataset; all successful pairs are retained."""
+    """Paired error differences, averaging the two arms within each dataset.
+
+    Every complete paired dataset is shown in seed order. Positive values
+    indicate lower Frengression error. Differences use the original scores.
+    """
     metrics = [('covariance_fro_error', 'Covariance error'),
-               ('joint_cdf_grid_mae', 'Joint CDF grid error')]
+               ('joint_cdf_grid_mae', 'Joint CDF grid error'),
+               ('mean_mae', 'Marginal mean error'),
+               ('joint_event_mae', 'Joint event probability error')]
     subset = results.loc[results.method.isin(['frengression_joint', 'conditional_engression_gcomp'])]
     if subset.duplicated(['seed', 'arm', 'method']).any():
         raise ValueError('Duplicate paired results')
@@ -255,23 +261,58 @@ def plot_paired_errors(results, stem, title=None):
     wide = wide.dropna()
     if wide.empty:
         return None
-    with plt.rc_context({'font.size': 10, 'axes.spines.top': False, 'axes.spines.right': False}):
-        fig, axes = plt.subplots(1, 2, figsize=(8.3, 4.4), constrained_layout=True)
-        for ax, (metric, label) in zip(axes, metrics):
-            x = wide[metric, 'frengression_joint']
-            y = wide[metric, 'conditional_engression_gcomp']
-            limit = max(float(x.max()), float(y.max()), 1e-8) * 1.08
-            ax.plot([0, limit], [0, limit], '--', color='0.45', linewidth=1)
-            for arm, color, marker in ((0, '#0072B2', 'o'), (1, '#D55E00', '^')):
-                mask = wide.index.get_level_values('arm') == arm
-                ax.scatter(x[mask], y[mask], s=34, alpha=0.8, color=color, marker=marker,
-                           edgecolor='white', linewidth=0.35, label=f'do(X={arm})')
-            ax.set(xlim=(0, limit), ylim=(0, limit), title=label,
-                   xlabel='Frengression error', ylabel='Conditional engression error')
-            ax.set_aspect('equal', adjustable='box')
-        axes[0].legend(frameon=False)
+    complete = [seed for seed, frame in wide.groupby(level='seed')
+                if set(frame.index.get_level_values('arm')) == {0, 1}]
+    if not complete:
+        return None
+    averaged = wide.loc[wide.index.get_level_values('seed').isin(complete)]
+    averaged = averaged.groupby(level='seed').mean().sort_index()
+    replication = np.arange(1, len(averaged) + 1)
+    positive, negative, ink = '#168B86', '#E76F51', '#263445'
+    with plt.rc_context({'font.size': 10, 'axes.titlesize': 11.5,
+                         'axes.spines.top': False, 'axes.spines.right': False,
+                         'axes.edgecolor': '#718096', 'axes.linewidth': 0.7,
+                         'axes.facecolor': 'white', 'figure.facecolor': 'white'}):
+        fig, axes = plt.subplots(2, 2, figsize=(8.8, 6.8), sharex=True)
+        for ax, (metric, label) in zip(axes.flat, metrics):
+            fr = averaged[metric, 'frengression_joint']
+            comparator = averaged[metric, 'conditional_engression_gcomp']
+            difference = (comparator - fr).to_numpy()
+            limit = max(float(np.abs(difference).max()), 1e-8) * 1.45
+            colours = np.where(difference >= 0, positive, negative)
+            ax.axhspan(0, limit, color=positive, alpha=0.045, zorder=0)
+            ax.axhspan(-limit, 0, color=negative, alpha=0.045, zorder=0)
+            ax.axhline(0, color=ink, linewidth=1.1, zorder=1)
+            ax.axhline(difference.mean(), color=ink, linestyle=':', linewidth=1.4,
+                       zorder=2)
+            ax.vlines(replication, 0, difference, colors=colours, linewidth=1.2,
+                      alpha=0.65, zorder=2)
+            ax.scatter(replication, difference, c=colours, s=31, edgecolors='white',
+                       linewidths=0.5, zorder=3)
+            ax.text(0.0, 1.015,
+                    f'{int((difference > 0).sum())}/{len(difference)} lower Frengression error'
+                    f'   |   mean Δ = {difference.mean():+.4f}',
+                    transform=ax.transAxes, va='bottom', fontsize=8.5)
+            ticks = sorted({1, len(replication), *range(10, len(replication), 10)})
+            ax.set(xlim=(0, len(replication) + 1), ylim=(-limit, limit), xticks=ticks)
+            ax.set_title(label, pad=28)
+            ax.grid(axis='y', color='#CBD5E0', linewidth=0.5, alpha=0.5)
+            ax.set_axisbelow(True)
+        for ax in axes[1]:
+            ax.set_xlabel('Replication')
+        fig.supylabel('Error difference: conditional engression − Frengression',
+                      x=0.015, fontsize=10.5)
+        handles = [Line2D([], [], marker='o', linestyle='none', color=positive,
+                          label='Lower Frengression error'),
+                   Line2D([], [], marker='o', linestyle='none', color=negative,
+                          label='Lower conditional engression error'),
+                   Line2D([], [], color=ink, linestyle=':', linewidth=1.4,
+                          label='Mean paired difference')]
+        fig.legend(handles=handles, loc='lower center', ncol=3, frameon=False,
+                   fontsize=9, bbox_to_anchor=(0.5, 0.005), columnspacing=1.2)
         if title:
             fig.suptitle(title, fontsize=12)
-        fig.supxlabel('Above the diagonal: lower Frengression error', fontsize=9)
+        fig.subplots_adjust(left=0.11, right=0.985, bottom=0.11,
+                            top=0.85 if title else 0.91, hspace=0.45, wspace=0.25)
         _save_figure(fig, stem)
     return fig
